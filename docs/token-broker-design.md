@@ -156,11 +156,11 @@ All three can be scoped to an app-only folder and refreshed only with a client s
 
 | | Google Drive | Dropbox | OneDrive |
 | --- | --- | --- | --- |
-| Scope | `drive.file` (only files the app created) | App folder permission, `token_access_type=offline` | `Files.ReadWrite.AppFolder offline_access`, `/drive/special/approot` |
+| Scope | `drive.file` (only files the app created) | App folder permission, `token_access_type=offline` | `Files.ReadWrite.AppFolder offline_access`, `/drive/special/approot`. POC-verified on personal accounts: root, `Apps/`, writes outside the folder and search are all refused |
 | Refresh needs secret | Yes, web clients always | Only if you use the confidential code flow. PKCE-only grants refresh with just the public app key, so use the secret | Yes, as a confidential web client |
-| Refresh token lifetime | Dies after 6 months unused. 7 days while the consent screen is in Testing. Max 100 per Google account per client; the oldest is silently dropped | No expiry, no rotation, valid until revoked | 90 days for web apps. Rotates on every use, so the broker must persist the new one |
+| Refresh token lifetime | Dies after 6 months unused. 7 days while the consent screen is in Testing. Max 100 per Google account per client; the oldest is silently dropped | No expiry, no rotation, valid until revoked | 90 days for web apps. Rotates on every refresh, and the old token keeps working ([POC](../poc/onedrive-appfolder/RESULTS.md)), so the broker must persist the new one and delete the old one itself |
 | Addressing | By file ID. Keep a path-to-ID index per pod, rebuildable by listing | By path | By path (`approot:/{path}:`) |
-| Conditional write | None documented in v3. Check the version, then write, under the CSS lock | `WriteMode.update` with `rev`; set `strict_conflict` so a mismatch is an error | `If-Match` eTag is documented for item PATCH, but not for `PUT /content`; test it |
+| Conditional write | None documented in v3. Check the version, then write, under the CSS lock | `WriteMode.update` with `rev`; set `strict_conflict` so a mismatch is an error | `If-Match` with an eTag or cTag on `PUT /content` and `DELETE` gives 412 on a mismatch (POC-verified). For create-only, use `conflictBehavior=fail` (409); `If-None-Match: *` is ignored |
 | Simple upload limit | Use resumable upload above a few MB | 150 MiB, then upload sessions | 250 MB, then upload sessions |
 | Revoke | `POST https://oauth2.googleapis.com/revoke` with the token | `POST /2/auth/token/revoke` with a fresh access token; kills the refresh token behind it | No per-grant revoke documented for personal accounts. Delete our copy and send the owner to their Microsoft account's app permissions page |
 | Gate before launch | Brand verification. `drive.file` avoids the paid restricted-scope audit | Production approval past 500 users | Publisher verification |
@@ -181,9 +181,9 @@ A lay person connects storage once, before their first pod exists, and never see
 
 ## Open questions
 
-- [ ] Does `Files.ReadWrite.AppFolder` work for personal Microsoft accounts? The [Graph permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference) says the delegated permission "is available for consent in personal Microsoft accounts" and needs no admin consent. A OneDrive POC is written to confirm this in practice; it's waiting on an app registration.
-- [ ] Does the same hold for OneDrive for Business (JMU work accounts)? A JMU app registration is pending IT review.
-- [ ] Does OneDrive `PUT /content` honour `If-Match`? It's documented only for metadata PATCH. The POC tests it.
+- [x] Does `Files.ReadWrite.AppFolder` work for personal Microsoft accounts? Yes, and it truly confines the app: see the [OneDrive POC results](../poc/onedrive-appfolder/RESULTS.md).
+- [ ] Does the same hold for OneDrive for Business (JMU work accounts)? A JMU app registration is pending IT review. Rerun the [POC](../poc/onedrive-appfolder/) with `MS_AUTHORITY=organizations`.
+- [x] Does OneDrive `PUT /content` honour `If-Match`? Yes: 412 on a stale eTag or cTag, for `DELETE` too. `If-None-Match: *` does not work; use `conflictBehavior=fail`.
 - [ ] Drive edits made outside the pod, such as a file the owner drops into the folder: with `drive.file` they're invisible. Is that acceptable, or does Drive need a sync-in step like solidshmolid's reconcile?
 - [ ] Where does it run? A small GCP VM with Cloud KMS and Secret Manager is enough to start. Check that KMS key access is restricted to the broker's service account only.
 - [ ] Is a single CSS process enough to start? If not, add the Redis locker and a shared access-token cache in the broker.

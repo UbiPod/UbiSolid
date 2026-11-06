@@ -1,0 +1,139 @@
+{
+  "at": "2026-11-06T19:18:52.969Z",
+  "authority": "consumers",
+  "scope": "Files.ReadWrite.AppFolder offline_access",
+  "checks": [
+    {
+      "id": "Q1a",
+      "question": "Consent granted the app-folder scope?",
+      "pass": true,
+      "detail": "granted scope: \"Files.ReadWrite.AppFolder\""
+    },
+    {
+      "id": "Q1b",
+      "question": "Which kind of OneDrive (personal = consumer, business = JMU work account)?",
+      "pass": null,
+      "detail": "driveType=personal"
+    },
+    {
+      "id": "Q1c",
+      "question": "GET /me/drive/special/approot works?",
+      "pass": true,
+      "detail": "folder \"BYODB\", parent path /drive/root:/Apps"
+    },
+    {
+      "id": "Q1d",
+      "question": "Root listing shows nothing but the Apps folder?",
+      "pass": true,
+      "detail": "GET /me/drive/root/children -> 200; 0 visible item(s): 0 other(s)"
+    },
+    {
+      "id": "Q1e",
+      "question": "Apps/ shows only this app's folder?",
+      "pass": true,
+      "detail": "GET /me/drive/root:/Apps:/children -> 404 itemNotFound: The resource could not be found."
+    },
+    {
+      "id": "Q1f",
+      "question": "Writing to the drive root is refused?",
+      "pass": false,
+      "detail": "PUT /me/drive/root:/poc-outside-1793992724692.txt -> 404 itemNotFound: Item not found"
+    },
+    {
+      "id": "Q1g",
+      "question": "Search finds nothing outside the app folder?",
+      "pass": true,
+      "detail": "GET /me/drive/root/search(q='a') -> 401 unauthenticated: Unauthorized when calling Substrate Search"
+    },
+    {
+      "id": "Q2a",
+      "question": "Create file in app folder",
+      "pass": true,
+      "detail": "PUT -> 201, eTag=\"{37325221-DDEC-4FB1-A652-0FD999E57903},1\", cTag=\"c:{37325221-DDEC-4FB1-A652-0FD999E57903},1\""
+    },
+    {
+      "id": "Q2b",
+      "question": "PUT with current eTag in If-Match succeeds",
+      "pass": true,
+      "detail": "-> 200, new eTag=\"{37325221-DDEC-4FB1-A652-0FD999E57903},2\""
+    },
+    {
+      "id": "Q2c",
+      "question": "PUT with STALE eTag is refused with 412",
+      "pass": true,
+      "detail": "-> 412 notAllowed: ETag does not match current item's value"
+    },
+    {
+      "id": "Q2d",
+      "question": "Content after the stale PUT is still v2",
+      "pass": true,
+      "detail": "content now: <#a> <#b> \"v2\"."
+    },
+    {
+      "id": "Q2e",
+      "question": "If-Match with a stale cTag is refused with 412",
+      "pass": true,
+      "detail": "-> 412 notAllowed: ETag does not match current item's value"
+    },
+    {
+      "id": "Q2f",
+      "question": "If-None-Match: * on an existing file is refused (create-only writes)",
+      "pass": false,
+      "detail": "-> 200 (overwrote)"
+    },
+    {
+      "id": "Q2g",
+      "question": "conflictBehavior=fail on an existing file refuses (alternative create-only)",
+      "pass": true,
+      "detail": "-> 409 nameAlreadyExists: The specified item name already exists."
+    },
+    {
+      "id": "Q2h",
+      "question": "DELETE with stale eTag is refused with 412",
+      "pass": true,
+      "detail": "-> 412 resourceModified: The resource has changed since the caller last read it; usually an eTag mismatch"
+    },
+    {
+      "id": "Q2i",
+      "question": "eTag changes on every content write",
+      "pass": null,
+      "detail": "v1=\"{37325221-DDEC-4FB1-A652-0FD999E57903},1\" v2=\"{37325221-DDEC-4FB1-A652-0FD999E57903},2\" before-delete=\"{37325221-DDEC-4FB1-A652-0FD999E57903},3\" (current at Q2e: \"{37325221-DDEC-4FB1-A652-0FD999E57903},2\")"
+    },
+    {
+      "id": "Q4a",
+      "question": "delta works on the app folder",
+      "pass": true,
+      "detail": "3 items, deltaLink present: true"
+    },
+    {
+      "id": "cleanup",
+      "question": "Delete the POC folder",
+      "pass": true,
+      "detail": "-> 204"
+    },
+    {
+      "id": "Q3a",
+      "question": "Refresh returns a NEW refresh token (rotation)",
+      "pass": true,
+      "detail": "-> 200; new RT returned: true; differs from previous: true"
+    },
+    {
+      "id": "Q3b",
+      "question": "Access token lifetime",
+      "pass": null,
+      "detail": "expires_in=3599s; refresh_token_expires_in=not stated"
+    },
+    {
+      "id": "Q3c",
+      "question": "The PREVIOUS refresh token still works after rotation",
+      "pass": null,
+      "detail": "yes: old RT redeemed again (old tokens are not revoked on rotation; the broker must delete them itself)"
+    },
+    {
+      "id": "Q3d",
+      "question": "The rotated refresh token works",
+      "pass": true,
+      "detail": "-> 200"
+    }
+  ]
+}
