@@ -44,4 +44,4 @@ It works alongside [css-invites](https://github.com/hcientist/css-invites). See 
 - Every request makes a few provider calls (`stat`, the `.meta` file, the write). Nothing is cached apart from Drive's path-to-ID map.
 - Pods must be path-based (`/name/`), which is CSS's default. Subdomain pods aren't handled by `PodLinkIndex.isServerLocal`.
 - Edits made directly in the provider don't trigger Solid notifications.
-- None of the adapters has been run against a real provider yet. The OneDrive adapter relies on the behaviour the POC verified. The Dropbox and Google Drive adapters follow the API docs. `test/adapter-conformance.ts` is ready to run against each provider once there is a token.
+- The OneDrive adapter passes `test/adapter-conformance.ts` (15 checks) against a personal OneDrive. The Dropbox and Google Drive adapters follow the API docs but haven't been run against the real service.

@@ -4,7 +4,8 @@ import type { CloudAdapter, CloudFs, CloudStat } from '../CloudFs';
 import { asBody, baseName, joinRoot, parentOf } from '../CloudFs';
 import { failure, providerFetch } from './http';
 
-const APPROOT = 'https://graph.microsoft.com/v1.0/me/drive/special/approot';
+const DRIVE = 'https://graph.microsoft.com/v1.0/me/drive';
+const APPROOT = `${DRIVE}/special/approot`;
 const SELECT = '$select=name,size,lastModifiedDateTime,folder,file,eTag';
 
 interface DriveItem {
@@ -68,18 +69,33 @@ export class OneDriveAdapter implements CloudAdapter {
         await res.body?.cancel();
         return;
       }
-      const create = (): Promise<Response> => providerFetch(`${itemUrl(parentOf(target))}/children`, {
+      // Graph rejects POST .../special/approot[:/path:]/children with 400 invalidRequest
+      // (verified live), so look up the parent's item id and create through /items/{id}.
+      const parentId = async(): Promise<string | undefined> => {
+        const res = await providerFetch(`${itemUrl(parentOf(target))}?$select=id`, { headers: auth }, 'OneDrive mkdir');
+        if (res.status === 404) {
+          await res.body?.cancel();
+          return undefined;
+        }
+        if (!res.ok) {
+          return failure(res, 'OneDrive mkdir');
+        }
+        return (await res.json() as { id: string }).id;
+      };
+      let id = await parentId();
+      if (!id) {
+        // Parent missing: create it relative to the pod root, then retry.
+        await mkdirp(parentOf(path));
+        id = await parentId();
+        if (!id) {
+          return failure(new Response('parent folder vanished', { status: 409 }), 'OneDrive mkdir');
+        }
+      }
+      const res = await providerFetch(`${DRIVE}/items/${encodeURIComponent(id)}/children`, {
         method: 'POST',
         headers: { ...auth, 'content-type': 'application/json' },
         body: JSON.stringify({ name: baseName(target), folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
       }, 'OneDrive mkdir');
-      let res = await create();
-      if (res.status === 404) {
-        await res.body?.cancel();
-        // Parent missing: create it relative to the pod root, then retry.
-        await mkdirp(parentOf(path));
-        res = await create();
-      }
       if (res.status === 409) {
         // Already exists. Make sure it is a folder.
         await res.body?.cancel();
