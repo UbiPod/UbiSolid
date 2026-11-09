@@ -190,7 +190,7 @@ The design is implemented in [`packages/broker`](../packages/broker/) and [`pack
 - **`PodLinkIndex` fails closed.** If the broker can't be reached and nothing is cached, pod requests get 503. Only the server root's own documents and `/.internal/` skip the broker, because those can never be inside a pod.
 - **Uploads are buffered** in memory, up to 100 MB. Resumable upload sessions come later.
 
-Tested: 8 broker unit tests; 37 end-to-end checks against the Docker test stack, using a fake provider that rotates refresh tokens like Microsoft; and the adapter conformance suite against the fake provider and, for OneDrive, live.
+Tested: 8 broker unit tests; 37 end-to-end checks against the Docker test stack, using a fake provider that rotates refresh tokens like Microsoft; and the adapter conformance suite against the fake provider. None of the three real providers has been run through the plugin yet. Next: `bun test/onedrive-device-token.ts` for a token, then `bun test/adapter-conformance.ts onedrive`.
 
 ## Open questions
 
