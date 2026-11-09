@@ -23,8 +23,14 @@ export async function providerFetch(url: string, init: RequestInit, label: strin
   for (let attempt = 0; ; attempt++) {
     let res: Response;
     const started = Date.now();
+    // Some provider front ends accept the connection and then stall the TLS handshake (seen on
+    // OneDrive's download hosts). undici waits 10 s for that; give up sooner and retry, which
+    // lands on a healthy connection. Allow extra time for the request body to upload.
+    const controller = new AbortController();
+    const size = (init.body as { byteLength?: number } | undefined)?.byteLength ?? 0;
+    const timer = setTimeout(() => controller.abort(new Error('no response headers in time')), 5_000 + size / 128);
     try {
-      res = await fetch(url, init);
+      res = await fetch(url, { ...init, signal: controller.signal });
     } catch (error) {
       const cause = (error as { cause?: { code?: string; message?: string } }).cause;
       const detail = `${(error as Error).message}${cause ? ` (${cause.code ?? cause.message})` : ''}`;
@@ -37,6 +43,9 @@ export async function providerFetch(url: string, init: RequestInit, label: strin
         continue;
       }
       throw new StorageUnavailableHttpError(`${label}: ${detail}`, { cause: error });
+    } finally {
+      // Only the wait for headers is bounded; reading the body is not.
+      clearTimeout(timer);
     }
     if (DEBUG) {
       // Path only: query strings and bodies may carry tokens.

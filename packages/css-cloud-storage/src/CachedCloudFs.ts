@@ -75,11 +75,7 @@ export class PodListingCache {
           return fromBuffer(hit.data);
         }
         const data = await collect(await fs.read(path));
-        this.files.delete(path);
-        this.files.set(path, { version: info.version, data });
-        if (this.files.size > MAX_FILES) {
-          this.files.delete(this.files.keys().next().value!);
-        }
+        this.remember(path, info.version, data);
         return fromBuffer(data);
       },
       write: async(path, data, ifVersion) => {
@@ -90,7 +86,12 @@ export class PodListingCache {
           this.invalidate(path);
           throw error;
         }
-        if (!(result && await this.updateEntry(path, result))) {
+        if (result && await this.updateEntry(path, result)) {
+          // CSS reads .meta files straight back after writing them.
+          if (result.version && data.length <= SMALL_FILE) {
+            this.remember(path, result.version, data);
+          }
+        } else {
           this.invalidate(path);
         }
         return result;
@@ -120,6 +121,14 @@ export class PodListingCache {
     };
   }
 
+  private remember(path: string, version: string, data: Buffer): void {
+    this.files.delete(path);
+    this.files.set(path, { version, data });
+    if (this.files.size > MAX_FILES) {
+      this.files.delete(this.files.keys().next().value!);
+    }
+  }
+
   /**
    * Puts a freshly written file into its folder's cached listing, so the next stat needs no call.
    * Returns false when there is no usable listing to update. A cached listing means the folder
@@ -146,7 +155,10 @@ export class PodListingCache {
   public invalidate(changed: string, subtree = false): void {
     const path = changed.replace(/\/+$/u, '') || '/';
     this.generation++;
-    this.rootStat = undefined;
+    // The pod folder's own stat only changes when the pod folder itself is created or removed.
+    if (path === '/') {
+      this.rootStat = undefined;
+    }
     const prefix = `${path.replace(/\/+$/u, '')}/`;
     for (const key of this.files.keys()) {
       if (key === path || key.startsWith(prefix)) {
