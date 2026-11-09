@@ -20,8 +20,11 @@ export interface CloudFs {
   read: (path: string) => Promise<Readable>;
   /** Throws NotFoundHttpError if the folder does not exist. */
   list: (path: string) => Promise<CloudStat[]>;
-  /** Creates missing parent folders. With `ifVersion`, fails with 412 unless the current version matches. */
-  write: (path: string, data: Buffer, ifVersion?: string) => Promise<void>;
+  /**
+   * Creates missing parent folders. With `ifVersion`, fails with 412 unless the current version matches.
+   * Returns the new file's stat when the provider reports it, which saves a listing.
+   */
+  write: (path: string, data: Buffer, ifVersion?: string) => Promise<CloudStat | void>;
   mkdirp: (path: string) => Promise<void>;
   /** Recursive. No error if it doesn't exist. */
   remove: (path: string) => Promise<void>;

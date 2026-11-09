@@ -142,7 +142,7 @@ export class DropboxAdapter implements CloudAdapter {
         if (!res.ok) {
           return failure(res, 'Dropbox write');
         }
-        await res.body?.cancel();
+        return toStat(await res.json() as Metadata);
       },
 
       mkdirp: async(path) => {

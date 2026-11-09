@@ -60,6 +60,7 @@
     <li><button type="submit" name="submit" disabled>Create pod</button></li>
     <li><button type="button" id="account-link">Back</button></li>
   </ul>
+  <p id="progress" class="hidden" role="status" aria-live="polite"></p>
 </form>
 <div class="hidden" id="response">
   <h2>Your new Pod</h2>
@@ -131,6 +132,25 @@
     });
 
     addPostListener(async() => {
+      const submit = mainForm.querySelector('button[type="submit"]');
+      const select = document.getElementById('linkId');
+      const where = select.value ? select.options[select.selectedIndex].textContent.replace(/ \(.*\)$/u, '') : '';
+      // Creating a pod in cloud storage takes a dozen round trips to the provider.
+      submit.disabled = true;
+      setError('');
+      updateElement('progress', where ?
+        `Creating your pod in ${where}. This can take up to a minute, so please keep this page open.` :
+        'Creating your pod…', { innerText: true });
+      setVisibility('progress', true);
+      try {
+        await createPod();
+      } finally {
+        submit.disabled = false;
+        setVisibility('progress', false);
+      }
+    });
+
+    async function createPod() {
       const formData = new FormData(mainForm);
       const json = {
         name: formData.get('name'),
@@ -161,6 +181,6 @@
       setVisibility('response', true);
       setVisibility('response-linkWebId', Boolean(webIdResource));
       setVisibility('mainForm', false);
-    });
+    }
   })();
 </script>

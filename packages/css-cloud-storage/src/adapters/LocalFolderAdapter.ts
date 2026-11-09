@@ -57,6 +57,7 @@ export class LocalFolderAdapter implements CloudAdapter {
         }
         await mkdir(dirname(real(path)), { recursive: true });
         await writeFile(real(path), data);
+        return toStat(real(path), path.split('/').pop() ?? '');
       },
       mkdirp: async(path) => {
         await mkdir(real(path), { recursive: true });

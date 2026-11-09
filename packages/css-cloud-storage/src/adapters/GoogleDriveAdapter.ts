@@ -168,7 +168,7 @@ export class GoogleDriveAdapter implements CloudAdapter {
         }
         let res: Response;
         if (existing) {
-          res = await providerFetch(`${UPLOAD}/files/${existing.id}?uploadType=media&fields=id`, {
+          res = await providerFetch(`${UPLOAD}/files/${existing.id}?uploadType=media&fields=${FIELDS}`, {
             method: 'PATCH',
             headers: { ...auth, 'content-type': 'application/octet-stream' },
             body: asBody(data),
@@ -183,7 +183,7 @@ export class GoogleDriveAdapter implements CloudAdapter {
             data,
             Buffer.from(`\r\n--${boundary}--`),
           ]);
-          res = await providerFetch(`${UPLOAD}/files?uploadType=multipart&fields=id`, {
+          res = await providerFetch(`${UPLOAD}/files?uploadType=multipart&fields=${FIELDS}`, {
             method: 'POST',
             headers: { ...auth, 'content-type': `multipart/related; boundary=${boundary}` },
             body: asBody(body),
@@ -192,7 +192,9 @@ export class GoogleDriveAdapter implements CloudAdapter {
         if (!res.ok) {
           return failure(res, 'Drive write');
         }
-        ids.set(target, (await res.json() as { id: string }).id);
+        const file = await res.json() as DriveFile;
+        ids.set(target, file.id);
+        return toStat(file);
       }),
 
       mkdirp: (path) => withRetry(async() => {

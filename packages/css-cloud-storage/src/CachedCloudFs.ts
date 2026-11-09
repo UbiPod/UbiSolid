@@ -83,13 +83,23 @@ export class PodListingCache {
         return fromBuffer(data);
       },
       write: async(path, data, ifVersion) => {
+        let result: CloudStat | void;
         try {
-          await fs.write(path, data, ifVersion);
-        } finally {
+          result = await fs.write(path, data, ifVersion);
+        } catch (error: unknown) {
+          this.invalidate(path);
+          throw error;
+        }
+        if (!(result && await this.updateEntry(path, result))) {
           this.invalidate(path);
         }
+        return result;
       },
       mkdirp: async(path) => {
+        // CSS writes every container on the way down; most of them already exist.
+        if ((await stat(path).catch(() => undefined))?.isDirectory) {
+          return;
+        }
         try {
           await fs.mkdirp(path);
         } finally {
@@ -97,6 +107,10 @@ export class PodListingCache {
         }
       },
       remove: async(path) => {
+        // CSS removes every alternative a document might be stored under (.meta, other extensions).
+        if (path !== '/' && !await stat(path).catch(() => true)) {
+          return;
+        }
         try {
           await fs.remove(path);
         } finally {
@@ -104,6 +118,28 @@ export class PodListingCache {
         }
       },
     };
+  }
+
+  /**
+   * Puts a freshly written file into its folder's cached listing, so the next stat needs no call.
+   * Returns false when there is no usable listing to update. A cached listing means the folder
+   * existed before the write, so no other folder changed.
+   * The folder's own stat (its mtime and version) is left as it was until the listing expires.
+   */
+  private async updateEntry(filePath: string, file: CloudStat): Promise<boolean> {
+    const path = parentOf(filePath).replace(/\/+$/u, '') || '/';
+    const entry = this.listings.get(path);
+    if (!entry || Date.now() - entry.at >= this.ttlMs) {
+      return false;
+    }
+    const listing = await entry.value.catch(() => undefined);
+    if (!listing || this.listings.get(path) !== entry) {
+      return false;
+    }
+    const name = baseName(filePath);
+    listing.set(name, { ...file, name });
+    this.files.delete(filePath);
+    return true;
   }
 
   /** Drops the folders that a change at `path` can affect: its ancestors, and with `subtree` everything below it. */

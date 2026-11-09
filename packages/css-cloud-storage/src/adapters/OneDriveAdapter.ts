@@ -158,7 +158,7 @@ export class OneDriveAdapter implements CloudAdapter {
         if (!res.ok) {
           return failure(res, 'OneDrive write');
         }
-        await res.body?.cancel();
+        return toStat(await res.json() as DriveItem);
       },
 
       remove: async(path) => {

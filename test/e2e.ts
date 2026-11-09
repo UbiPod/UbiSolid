@@ -62,8 +62,10 @@ async function solidToken(controls: any, token: string, webId: string): Promise<
 
 // ------------------------------------------------------------------ accounts and linking
 
-const alice = await signUp('SEED-TEST-CODE-0001', 'alice');
-const bob = await signUp('SEED-TEST-CODE-0002', 'bob');
+// Invite codes are single use. Against a stack that keeps its data, pass fresh ones: E2E_CODES=a,b
+const [ codeA, codeB ] = (process.env.E2E_CODES ?? 'SEED-TEST-CODE-0001,SEED-TEST-CODE-0002').split(',');
+const alice = await signUp(codeA, 'alice');
+const bob = await signUp(codeB, 'bob');
 check('account controls include storage', typeof alice.controls.account.storage === 'string', alice.controls.account.storage);
 
 const storageUrl: string = alice.controls.account.storage;
