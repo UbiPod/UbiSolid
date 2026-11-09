@@ -22,6 +22,7 @@ services:
       CSS_PORT: "3998"
       CSS_LOGGING_LEVEL: info
       BROKER_URL: http://broker:8600
+      CLOUD_DEBUG: "1"
       BROKER_SERVICE_KEY: test-service-key-test-service-key-0001
       FAKE_STORAGE_DIR: /fake-cloud
       INVITES_SEED_CODES: SEED-TEST-CODE-0001,SEED-TEST-CODE-0002,SEED-TEST-CODE-0003

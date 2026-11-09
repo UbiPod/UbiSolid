@@ -2,6 +2,7 @@ export * from './adapters/DropboxAdapter';
 export * from './adapters/GoogleDriveAdapter';
 export * from './adapters/LocalFolderAdapter';
 export * from './adapters/OneDriveAdapter';
+export * from './CachedCloudFs';
 export * from './CloudDataAccessor';
 export * from './CloudFs';
 export * from './CloudPathMapper';

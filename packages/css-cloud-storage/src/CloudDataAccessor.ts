@@ -34,6 +34,7 @@ import {
 import type { CloudAdapter, CloudFs, CloudStat } from './CloudFs';
 import { PayloadTooLargeHttpError, StorageUnavailableHttpError } from './CloudFs';
 import { TokenRejectedError } from './adapters/http';
+import { PodListingCache } from './CachedCloudFs';
 import { CloudPathMapper } from './CloudPathMapper';
 import type { PodLinkIndex } from './PodLinkIndex';
 import type { TokenBrokerClient } from './TokenBrokerClient';
@@ -76,6 +77,8 @@ function toBuffer(stream: Readable, max: number): Promise<Buffer> {
 export class CloudDataAccessor implements DataAccessor {
   protected readonly logger = getLoggerFor(this);
   private readonly adapters: Map<string, CloudAdapter>;
+  /** Per-pod folder listings: see PodListingCache. */
+  private readonly caches = new Map<string, PodListingCache>();
 
   /**
    * @param fallback - Accessor for everything not in a linked pod (normally the FileDataAccessor).
@@ -108,7 +111,13 @@ export class CloudDataAccessor implements DataAccessor {
     if (!adapter) {
       throw new StorageUnavailableHttpError(`No adapter for ${token.provider} on this server.`);
     }
-    const fs = adapter.open(token.accessToken, token.root);
+    const key = `${link.linkId} ${token.provider} ${token.root}`;
+    let cache = this.caches.get(key);
+    if (!cache) {
+      cache = new PodListingCache();
+      this.caches.set(key, cache);
+    }
+    const fs = cache.wrap(adapter.open(token.accessToken, token.root));
     return {
       fs,
       mapper: new CloudPathMapper(link.podBase, fs),

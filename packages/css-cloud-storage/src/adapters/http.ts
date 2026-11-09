@@ -9,6 +9,8 @@ import { InsufficientStorageHttpError, StorageUnavailableHttpError } from '../Cl
 /** Thrown on 401 so the accessor can drop its cached token and retry once. */
 export class TokenRejectedError extends Error {}
 
+const DEBUG = Boolean(process.env.CLOUD_DEBUG);
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -20,10 +22,25 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export async function providerFetch(url: string, init: RequestInit, label: string): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     let res: Response;
+    const started = Date.now();
     try {
       res = await fetch(url, init);
     } catch (error) {
-      throw new StorageUnavailableHttpError(`${label}: ${(error as Error).message}`, { cause: error });
+      const cause = (error as { cause?: { code?: string; message?: string } }).cause;
+      const detail = `${(error as Error).message}${cause ? ` (${cause.code ?? cause.message})` : ''}`;
+      if (DEBUG) {
+        process.stderr.write(`[cloud] ${label} ${init.method ?? 'GET'} ${new URL(url).pathname} failed after ${Date.now() - started}ms: ${detail}\n`);
+      }
+      // Network failures happen before the provider acts on the request, or on an idempotent
+      // request (reads, If-Match writes, deletes), so one retry is safe.
+      if (attempt === 0) {
+        continue;
+      }
+      throw new StorageUnavailableHttpError(`${label}: ${detail}`, { cause: error });
+    }
+    if (DEBUG) {
+      // Path only: query strings and bodies may carry tokens.
+      process.stderr.write(`[cloud] ${label} ${init.method ?? 'GET'} ${new URL(url).pathname} ${res.status} ${Date.now() - started}ms\n`);
     }
     if (res.status === 401) {
       throw new TokenRejectedError(`${label}: access token rejected`);

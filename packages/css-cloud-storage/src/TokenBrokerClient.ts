@@ -54,6 +54,7 @@ export class TokenBrokerClient {
 
   public async call<T>(method: string, path: string, body?: object): Promise<T> {
     let res: Response;
+    const started = Date.now();
     try {
       res = await fetch(`${this.url}${path}`, {
         method,
@@ -65,6 +66,9 @@ export class TokenBrokerClient {
       });
     } catch (error) {
       throw new StorageUnavailableHttpError('The token broker is unreachable.', { cause: error });
+    }
+    if (process.env.CLOUD_DEBUG) {
+      process.stderr.write(`[cloud] broker ${method} ${path.split('?')[0]} ${res.status} ${Date.now() - started}ms\n`);
     }
     const json = await res.json().catch(() => ({})) as Record<string, unknown>;
     if (res.ok) {

@@ -8,3 +8,12 @@ services:
       ONEDRIVE_CLIENT_ID: ${ONEDRIVE_CLIENT_ID:?set in deploy/.env}
       ONEDRIVE_CLIENT_SECRET: ${ONEDRIVE_CLIENT_SECRET:?set in deploy/.env}
       ONEDRIVE_TENANT: ${ONEDRIVE_TENANT:-common}
+    # Keep links and accounts across restarts while testing with a real account.
+    tmpfs: !reset []
+    volumes: ["onedrive-broker:/data"]
+  css:
+    tmpfs: !reset []
+    volumes: ["onedrive-css:/data"]
+volumes:
+  onedrive-broker:
+  onedrive-css:
