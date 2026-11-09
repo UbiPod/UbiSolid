@@ -1,0 +1,39 @@
+{
+  "name": "css-cloud-storage",
+  "version": "0.1.0",
+  "description": "Community Solid Server plugin: keep pods in the owner's OneDrive, Dropbox or Google Drive, with refresh tokens held by a separate broker",
+  "keywords": ["solid", "community-solid-server", "css", "onedrive", "dropbox", "google-drive", "components.js"],
+  "homepage": "https://github.com/hcientist/UbiSolid#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/hcientist/UbiSolid.git", "directory": "packages/css-cloud-storage" },
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "lsd:module": "https://linkedsoftwaredependencies.org/bundles/npm/css-cloud-storage",
+  "lsd:components": "dist/components/components.jsonld",
+  "lsd:contexts": {
+    "https://linkedsoftwaredependencies.org/bundles/npm/css-cloud-storage/^0.1.0/components/context.jsonld": "dist/components/context.jsonld"
+  },
+  "lsd:importPaths": {
+    "https://linkedsoftwaredependencies.org/bundles/npm/css-cloud-storage/^0.1.0/components/": "dist/components/",
+    "https://linkedsoftwaredependencies.org/bundles/npm/css-cloud-storage/^0.1.0/config/": "config/",
+    "https://linkedsoftwaredependencies.org/bundles/npm/css-cloud-storage/^0.1.0/dist/": "dist/"
+  },
+  "scripts": {
+    "build": "bun run build:ts && bun run build:components",
+    "build:ts": "tsc",
+    "build:components": "componentsjs-generator -s src -c dist/components -i .componentsignore -r cloud",
+    "prepublishOnly": "bun run build"
+  },
+  "files": ["dist", "config", "templates"],
+  "dependencies": {
+    "@solid/community-server": "~7.3.0",
+    "mime-types": "^2.1.35"
+  },
+  "devDependencies": {
+    "@types/mime-types": "^2.1.4",
+    "@types/node": "^20.14.0",
+    "componentsjs-generator": "^3.1.2",
+    "typescript": "^5.4.5"
+  },
+  "engines": { "node": ">=18.0" }
+}

@@ -1,0 +1,31 @@
+# Local end-to-end test: fake provider, local master key, CSS on 127.0.0.1:3998.
+#   docker compose -f deploy/compose.test.yaml up -d && bun test/e2e.ts
+name: ubisolid-test
+services:
+  broker:
+    image: ubisolid-broker:dev
+    environment:
+      BROKER_SERVICE_KEY: test-service-key-test-service-key-0001
+      BROKER_MASTER_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+      BROKER_REDIRECT_URI: http://localhost:3998/.account/storage/callback/
+      BROKER_FAKE_PROVIDER: "1"
+    ports: ["127.0.0.1:3997:8600"]
+    tmpfs: ["/data:uid=1000,gid=1000"]
+  css:
+    image: ubisolid-css:dev
+    depends_on:
+      broker: { condition: service_healthy }
+    user: "1000:1000"
+    environment:
+      CSS_BASE_URL: http://localhost:3998/
+      # Same port inside and out, so CSS can dereference its own WebIDs at the base URL.
+      CSS_PORT: "3998"
+      CSS_LOGGING_LEVEL: info
+      BROKER_URL: http://broker:8600
+      BROKER_SERVICE_KEY: test-service-key-test-service-key-0001
+      FAKE_STORAGE_DIR: /fake-cloud
+      INVITES_SEED_CODES: SEED-TEST-CODE-0001,SEED-TEST-CODE-0002,SEED-TEST-CODE-0003
+    volumes:
+      - ../.test-data/fake-cloud:/fake-cloud
+    tmpfs: ["/data:uid=1000,gid=1000"]
+    ports: ["127.0.0.1:3998:3998"]

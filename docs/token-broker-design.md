@@ -179,6 +179,19 @@ A lay person connects storage once, before their first pod exists, and never see
 6. From now on, any agent reading the pod goes through CSS, then `CloudDataAccessor`, then a broker-issued access token, then the provider.
 7. Disconnect, on the same page, revokes at the provider, shreds the data key and takes the pod offline. The files stay in the owner's storage, in a layout any CSS can serve.
 
+## Implementation (v0.1)
+
+The design is implemented in [`packages/broker`](../packages/broker/) and [`packages/css-cloud-storage`](../packages/css-cloud-storage/). Where the code differs from the plan above:
+
+- **The broker has no public listener at all.** Providers redirect to a CSS page, `/.account/storage/callback/`. Its script posts `code` and `state` to the account API with the visitor's own session, and CSS forwards them with that session's account ID. The broker refuses to finish a link started by a different account. This blocks the attack where someone links their storage to another person's account (or the reverse) by sending them a callback URL.
+- **Unlinking keeps the row,** with `status = revoked` and the wrapped key and sealed token set to NULL. The pod's binding stays, so the pod answers 503 instead of reappearing as an empty pod on local disk.
+- **503 needs a guard before authorization.** CSS's `UnionPermissionReader` ignores errors from its readers, so a storage error while looking for `.acl` files turns into 401 or 403. `StorageStatusModesExtractor` checks the pod's link first and answers 503.
+- **Pod folders.** Each pod lives in `<app folder>/<pod name>/`. Google Drive puts this under a `UbiSolid` folder, because `drive.file` has no app folder.
+- **`PodLinkIndex` fails closed.** If the broker can't be reached and nothing is cached, pod requests get 503. Only the server root's own documents and `/.internal/` skip the broker, because those can never be inside a pod.
+- **Uploads are buffered** in memory, up to 100 MB. Resumable upload sessions come later.
+
+Tested: 8 broker unit tests; 37 end-to-end checks against the Docker test stack, using a fake provider that rotates refresh tokens like Microsoft; and the adapter conformance suite against the fake provider and, for OneDrive, live.
+
 ## Open questions
 
 - [x] Does `Files.ReadWrite.AppFolder` work for personal Microsoft accounts? Yes, and it truly confines the app: see the [OneDrive POC results](../poc/onedrive-appfolder/RESULTS.md).

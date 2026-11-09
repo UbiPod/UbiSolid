@@ -1,0 +1,8 @@
+{
+  "@context": "https://linkedsoftwaredependencies.org/bundles/npm/@solid/community-server/^7.0.0/components/context.jsonld",
+  "import": [
+    "css:config/file.json",
+    "https://linkedsoftwaredependencies.org/bundles/npm/css-invites/^0.1.0/config/invites.json",
+    "https://linkedsoftwaredependencies.org/bundles/npm/css-cloud-storage/^0.1.0/config/cloud-storage.json"
+  ]
+}

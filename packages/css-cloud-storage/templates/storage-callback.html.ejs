@@ -1,0 +1,30 @@
+<h1>Connecting storage…</h1>
+<p class="error" id="error"></p>
+<p id="status">Finishing up.</p>
+<p class="actions"><a id="back" class="link hidden" href="">Back to connected storage</a></p>
+
+<script>
+  (async() => {
+    const params = new URLSearchParams(location.search);
+    // Don't leave the code in the address bar or history.
+    history.replaceState(null, '', location.pathname);
+    const controls = await fetchControls('<%= idpIndex %>');
+    if (params.get('error')) {
+      throw new Error(`The provider said: ${params.get('error_description') ?? params.get('error')}`);
+    }
+    if (!controls.account?.storage) {
+      throw new Error('You need to be logged in to this server in this browser. Log in, then connect again.');
+    }
+    updateElement('back', controls.html.account.storage, { href: true });
+    const res = await postJson(controls.account.storage, { code: params.get('code'), state: params.get('state') });
+    const body = await res.json();
+    if (res.status >= 400) {
+      throw new Error(body.message);
+    }
+    location.href = controls.html.account.storage;
+  })().catch((error) => {
+    updateElement('error', error.message, { innerText: true });
+    setVisibility('status', false);
+    setVisibility('back', true);
+  });
+</script>

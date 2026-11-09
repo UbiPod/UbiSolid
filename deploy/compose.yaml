@@ -1,0 +1,42 @@
+# Production layout: CSS on the `web` network for Nginx Proxy Manager. The broker publishes no ports and sits only on
+# a private network shared with CSS (a normal bridge, since it needs outbound access to the providers and KMS).
+# Secrets live in .env next to this file (see .env.example). Build the images first (see deploy/README.md).
+name: ubisolid
+services:
+  broker:
+    image: ubisolid-broker:0.1.0
+    container_name: ubisolid-broker
+    restart: unless-stopped
+    user: "1000:1000"
+    env_file: .env
+    environment:
+      BROKER_DB: /data/broker.sqlite
+    volumes:
+      - ./broker-data:/data
+    networks: [broker]
+    mem_limit: 128m
+    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
+
+  css:
+    image: ubisolid-css:0.1.0
+    container_name: ubisolid-css
+    restart: unless-stopped
+    user: "1000:1000"
+    depends_on:
+      broker: { condition: service_healthy }
+    environment:
+      CSS_BASE_URL: ${CSS_BASE_URL}
+      CSS_LOGGING_LEVEL: info
+      BROKER_URL: http://ubisolid-broker:8600
+      BROKER_SERVICE_KEY: ${BROKER_SERVICE_KEY}
+      INVITES_ADMIN_WEBIDS: ${INVITES_ADMIN_WEBIDS}
+    volumes:
+      - ./css-data:/data
+    networks: [web, broker]
+    mem_limit: 512m
+    cpus: 1.0
+    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
+
+networks:
+  web: { external: true }
+  broker: {}

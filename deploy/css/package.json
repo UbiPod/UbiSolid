@@ -1,0 +1,10 @@
+{
+  "name": "ubisolid-css",
+  "private": true,
+  "description": "Community Solid Server 7.3 with css-invites and css-cloud-storage",
+  "dependencies": {
+    "@solid/community-server": "~7.3.0",
+    "css-invites": "^0.1.1",
+    "css-cloud-storage": "file:./css-cloud-storage.tgz"
+  }
+}

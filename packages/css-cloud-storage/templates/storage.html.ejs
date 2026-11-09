@@ -1,0 +1,89 @@
+<h1>Connected storage</h1>
+<p class="error" id="error"></p>
+<p>
+  Your pods can keep their files in cloud storage you already have.
+  This server only gets access to one app folder in that account, never the rest of your files.
+  It never stores a password, and the long-lived permission is kept encrypted in a separate service.
+</p>
+
+<h2>Connected</h2>
+<ul id="links"><li>Loading…</li></ul>
+
+<h2>Connect</h2>
+<p id="providers" class="actions"></p>
+
+<p class="actions"><button type="button" id="account-link">Back</button></p>
+
+<script>
+  const names = { onedrive: 'OneDrive', dropbox: 'Dropbox', googledrive: 'Google Drive', fake: 'Test storage' };
+  const showError = (message) => updateElement('error', message, { innerText: true });
+
+  (async() => {
+    const controls = await fetchControls('<%= idpIndex %>');
+    setRedirectClick('account-link', controls.html.account.account);
+    if (!controls.account?.storage) {
+      location.href = controls.html.main.login;
+      return;
+    }
+    const url = controls.account.storage;
+    const { providers, links } = await fetchJson(url);
+
+    const list = document.getElementById('links');
+    list.textContent = '';
+    if (links.length === 0) {
+      list.insertAdjacentHTML('beforeend', '<li>Nothing yet.</li>');
+    }
+    for (const link of links) {
+      const li = document.createElement('li');
+      const label = document.createElement('strong');
+      label.textContent = names[link.provider] ?? link.provider;
+      li.append(label, ` ${link.email ?? ''} `);
+      if (link.status !== 'active') {
+        li.append('(disconnected) ');
+      }
+      if (link.pods.length) {
+        li.append(`· pods: ${link.pods.join(', ')} `);
+      }
+      if (link.status === 'active') {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Disconnect';
+        button.addEventListener('click', async() => {
+          const pods = link.pods.length ?
+            ` The pods ${link.pods.join(', ')} will go offline. Their files stay in your ${names[link.provider]}.` : '';
+          if (!confirm(`Disconnect ${names[link.provider] ?? link.provider}?${pods}`)) {
+            return;
+          }
+          const res = await postJson(url, { unlink: link.linkId });
+          const body = await res.json();
+          if (res.status >= 400) {
+            return showError(body.message);
+          }
+          if (body.revokedAtProvider === 'unsupported') {
+            alert('Disconnected. Microsoft has no way for us to withdraw the permission, so also remove the app at ' +
+              'https://account.live.com/consent/Manage (personal) or https://myapps.microsoft.com (work or school).');
+          }
+          location.reload();
+        });
+        li.append(button);
+      }
+      list.append(li);
+    }
+
+    const buttons = document.getElementById('providers');
+    for (const provider of providers) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = `Connect ${names[provider] ?? provider}`;
+      button.addEventListener('click', async() => {
+        const res = await postJson(url, { provider });
+        const body = await res.json();
+        if (res.status >= 400) {
+          return showError(body.message);
+        }
+        location.href = body.authorizeUrl;
+      });
+      buttons.append(button, ' ');
+    }
+  })().catch((error) => showError(error.message));
+</script>

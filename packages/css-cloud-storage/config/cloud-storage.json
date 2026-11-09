@@ -1,0 +1,174 @@
+{
+  "@context": [
+    "https://linkedsoftwaredependencies.org/bundles/npm/@solid/community-server/^7.0.0/components/context.jsonld",
+    "https://linkedsoftwaredependencies.org/bundles/npm/css-cloud-storage/^0.1.0/components/context.jsonld"
+  ],
+  "@graph": [
+    {
+      "comment": "Talks to the token broker. URL and key from BROKER_URL and BROKER_SERVICE_KEY.",
+      "@id": "urn:css-cloud-storage:Broker",
+      "@type": "TokenBrokerClient"
+    },
+    {
+      "@id": "urn:css-cloud-storage:PodLinkIndex",
+      "@type": "PodLinkIndex",
+      "broker": { "@id": "urn:css-cloud-storage:Broker" },
+      "baseUrl": { "@id": "urn:solid-server:default:variable:baseUrl" }
+    },
+
+    {
+      "comment": "Linked pods are read and written in the owner's cloud storage; everything else stays on local disk.",
+      "@type": "Override",
+      "overrideInstance": { "@id": "urn:solid-server:default:ResourceStore_Backend" },
+      "overrideParameters": {
+        "@type": "DataAccessorBasedStore",
+        "identifierStrategy": { "@id": "urn:solid-server:default:IdentifierStrategy" },
+        "auxiliaryStrategy": { "@id": "urn:solid-server:default:AuxiliaryStrategy" },
+        "metadataStrategy": { "@id": "urn:solid-server:default:MetadataStrategy" },
+        "accessor": {
+          "@id": "urn:css-cloud-storage:CloudDataAccessor",
+          "@type": "CloudDataAccessor",
+          "fallback": { "@id": "urn:solid-server:default:FileDataAccessor" },
+          "broker": { "@id": "urn:css-cloud-storage:Broker" },
+          "pods": { "@id": "urn:css-cloud-storage:PodLinkIndex" },
+          "adapters": [
+            { "@type": "OneDriveAdapter" },
+            { "@type": "DropboxAdapter" },
+            { "@type": "GoogleDriveAdapter" },
+            { "@type": "LocalFolderAdapter" }
+          ]
+        }
+      }
+    },
+
+    {
+      "comment": "Disconnected storage answers 503 before authorization would turn it into 401/403. Same as CSS's config/ldp/modes/default.json, with the status check in front.",
+      "@type": "Override",
+      "overrideInstance": { "@id": "urn:solid-server:default:ModesExtractor" },
+      "overrideParameters": {
+        "@type": "CachedHandler",
+        "source": {
+          "@type": "StorageStatusModesExtractor",
+          "pods": { "@id": "urn:css-cloud-storage:PodLinkIndex" },
+          "broker": { "@id": "urn:css-cloud-storage:Broker" },
+          "source": {
+            "@type": "IntermediateCreateExtractor",
+            "resourceSet": { "@id": "urn:solid-server:default:CachedResourceSet" },
+            "strategy": { "@id": "urn:solid-server:default:IdentifierStrategy" },
+            "source": { "@id": "urn:solid-server:default:HttpModesExtractor" }
+          }
+        }
+      }
+    },
+
+    {
+      "comment": "Pod creation binds the pod to a storage link first when the request has settings.linkId.",
+      "@type": "Override",
+      "overrideInstance": { "@id": "urn:solid-server:default:PodCreator" },
+      "overrideParameters": {
+        "@type": "CloudPodCreator",
+        "source": {
+          "@type": "BasePodCreator",
+          "baseUrl": { "@id": "urn:solid-server:default:variable:baseUrl" },
+          "identifierGenerator": { "@id": "urn:solid-server:default:IdentifierGenerator" },
+          "relativeWebIdPath": "/profile/card#me",
+          "webIdStore": { "@id": "urn:solid-server:default:WebIdStore" },
+          "podStore": { "@id": "urn:solid-server:default:PodStore" }
+        },
+        "identifierGenerator": { "@id": "urn:solid-server:default:IdentifierGenerator" },
+        "podStore": { "@id": "urn:solid-server:default:PodStore" },
+        "broker": { "@id": "urn:css-cloud-storage:Broker" },
+        "pods": { "@id": "urn:css-cloud-storage:PodLinkIndex" }
+      }
+    },
+
+    {
+      "comment": "The account's connected storage: /.account/account/<id>/storage/",
+      "@id": "urn:css-cloud-storage:StorageRoute",
+      "@type": "RelativePathInteractionRoute",
+      "base": { "@id": "urn:solid-server:default:AccountIdRoute" },
+      "relativePath": "storage/"
+    },
+    {
+      "comment": "Where providers send the browser back to. Register exactly this URL with each provider.",
+      "@id": "urn:css-cloud-storage:StorageCallbackRoute",
+      "@type": "RelativePathInteractionRoute",
+      "base": { "@id": "urn:solid-server:default:IndexRoute" },
+      "relativePath": "storage/callback/"
+    },
+    {
+      "@id": "urn:solid-server:default:InteractionRouteHandler",
+      "@type": "WaterfallHandler",
+      "handlers": [
+        {
+          "@id": "urn:css-cloud-storage:StorageRouter",
+          "@type": "AuthorizedRouteHandler",
+          "route": { "@id": "urn:css-cloud-storage:StorageRoute" },
+          "source": {
+            "@type": "ViewInteractionHandler",
+            "source": {
+              "@id": "urn:css-cloud-storage:StorageHandler",
+              "@type": "StorageHandler",
+              "broker": { "@id": "urn:css-cloud-storage:Broker" }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "@id": "urn:solid-server:default:AccountControlHandler",
+      "@type": "ControlHandler",
+      "controls": [{
+        "ControlHandler:_controls_key": "storage",
+        "ControlHandler:_controls_value": { "@id": "urn:css-cloud-storage:StorageRoute" }
+      }]
+    },
+    {
+      "@id": "urn:solid-server:default:AccountHtmlControlHandler",
+      "@type": "ControlHandler",
+      "controls": [{
+        "ControlHandler:_controls_key": "storage",
+        "ControlHandler:_controls_value": { "@id": "urn:css-cloud-storage:StorageRoute" }
+      }]
+    },
+
+    {
+      "@id": "urn:solid-server:default:HtmlViewHandler",
+      "@type": "HtmlViewHandler",
+      "templates": [
+        {
+          "@id": "urn:css-cloud-storage:StorageHtml",
+          "@type": "PluginHtmlViewEntry",
+          "route": { "@id": "urn:css-cloud-storage:StorageRoute" },
+          "template": "storage.html.ejs"
+        },
+        {
+          "@id": "urn:css-cloud-storage:StorageCallbackHtml",
+          "@type": "PluginHtmlViewEntry",
+          "route": { "@id": "urn:css-cloud-storage:StorageCallbackRoute" },
+          "template": "storage-callback.html.ejs"
+        }
+      ]
+    },
+    {
+      "comment": "The account page gains a Storage section.",
+      "@type": "Override",
+      "overrideInstance": { "@id": "urn:solid-server:default:AccountIdHtml" },
+      "overrideParameters": {
+        "@type": "PluginHtmlViewEntry",
+        "route": { "@id": "urn:solid-server:default:AccountIdRoute" },
+        "template": "account.html.ejs"
+      }
+    },
+    {
+      "comment": "The create-pod page asks where to store the pod.",
+      "@type": "Override",
+      "overrideInstance": { "@id": "urn:solid-server:default:CreatePodHtml" },
+      "overrideParameters": {
+        "@type": "PluginHtmlViewEntry",
+        "route": { "@id": "urn:solid-server:default:AccountPodRoute" },
+        "template": "create-pod.html.ejs"
+      }
+    }
+  ]
+}
