@@ -4,5 +4,20 @@
     "css:config/file.json",
     "https://linkedsoftwaredependencies.org/bundles/npm/css-invites/^0.1.0/config/invites.json",
     "https://linkedsoftwaredependencies.org/bundles/npm/css-cloud-storage/^0.1.0/config/cloud-storage.json"
+  ],
+  "@graph": [
+    {
+      "comment": "CSS's file locker with 60 s instead of 6 s. Pod creation in cloud storage makes a dozen provider round trips while holding the account and pod locks, which takes ~15 s on OneDrive.",
+      "@type": "Override",
+      "overrideInstance": { "@id": "urn:solid-server:default:ResourceLocker" },
+      "overrideParameters": {
+        "@type": "WrappedExpiringReadWriteLocker",
+        "locker": {
+          "@type": "PartialReadWriteLocker",
+          "locker": { "@id": "urn:solid-server:default:FileSystemResourceLocker" }
+        },
+        "expiration": 60000
+      }
+    }
   ]
 }
