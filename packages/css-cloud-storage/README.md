@@ -35,7 +35,7 @@ Set these environment variables:
 | `BROKER_SERVICE_KEY` | the shared secret the broker expects |
 | `FAKE_STORAGE_DIR` | tests only: enables `LocalFolderAdapter` |
 
-It works alongside [css-invites](https://github.com/hcientist/css-invites). See `deploy/css/` for a combined image.
+It works alongside [css-invites](https://github.com/UbiPod/css-invites). See `deploy/css/` for a combined image.
 
 ## Limits (0.1)
 
