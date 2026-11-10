@@ -12,6 +12,8 @@ export interface IssuedToken {
   expiresAt: number;
   provider: string;
   root: string;
+  /** Provider-specific placement, e.g. `{ driveId, folderId }` in tenant mode. */
+  location?: Record<string, string>;
 }
 
 export interface StorageLink {

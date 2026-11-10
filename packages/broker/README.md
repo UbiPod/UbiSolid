@@ -28,9 +28,23 @@ A small Bun service (SQLite, no dependencies) that holds the long-lived provider
 | `POST /session/push {provider, accountId, accessToken, expiresIn}` | private mode: an access token from the owner's browser. The provider confirms whose it is; it's kept in memory only, for at most 2 hours |
 | `GET /healthz` | no auth |
 
+Tenant provisioning has its own key (`Authorization: Bearer $BROKER_PROVISIONER_KEY`), which can't get tokens:
+
+| | |
+| --- | --- |
+| `GET /tenant/queue` | `{provision: [...], deprovision: [...]}` |
+| `POST /tenant/links/{id}/activate {driveId, folderId, permissionId}` | goes live only if the broker's app can really reach the folder |
+| `POST /tenant/links/{id}/revoked` | the grant was removed |
+
+## Modes
+
+- **Stored** (default): the broker keeps the refresh token, as above.
+- **Private** (`mode: session`): the owner's browser keeps the grant and pushes access tokens. Nothing token-like is stored. See the plugin's `/.account/storage/session/` page.
+- **Tenant** (`provider: onedrive-tenant`, prototype): for an institution's own Entra tenant. Users sign in with OpenID Connect only, to prove who they are. [`src/provisioner.ts`](src/provisioner.ts), run separately with an admin credential, creates each user's `UbiSolid` folder and grants the broker's app `write` on it (Files.SelectedOperations.Selected). The broker then uses its own app-only token, from a secret or a certificate (`private_key_jwt`). It stores no user tokens. Disconnecting queues removal of the grant; the files stay. Tested against [`test/mock-graph.ts`](../../test/mock-graph.ts) only.
+
 ## Environment
 
-`BROKER_SERVICE_KEY` (at least 32 characters), `BROKER_REDIRECT_URI`, `BROKER_KMS_KEY` or `BROKER_MASTER_KEY`/`BROKER_MASTER_KEY_FILE`, `BROKER_DB`, `BROKER_PORT` or `BROKER_SOCKET`. Then for each provider: `ONEDRIVE_CLIENT_ID`/`_SECRET`/`ONEDRIVE_TENANT`, `DROPBOX_CLIENT_ID`/`_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`. `BROKER_SESSION_REDIRECT_URI` (private mode; defaults to the redirect URI with `callback/` replaced by `session/`). `BROKER_FAKE_PROVIDER=1` enables the test provider, including its browser-facing `/fake/authorize` and `/fake/token` routes (`BROKER_FAKE_PUBLIC_URL`, default `http://localhost:3997`); never set it in production.
+`BROKER_SERVICE_KEY` (at least 32 characters), `BROKER_REDIRECT_URI`, `BROKER_KMS_KEY` or `BROKER_MASTER_KEY`/`BROKER_MASTER_KEY_FILE`, `BROKER_DB`, `BROKER_PORT` or `BROKER_SOCKET`. Then for each provider: `ONEDRIVE_CLIENT_ID`/`_SECRET`/`ONEDRIVE_TENANT`, `DROPBOX_CLIENT_ID`/`_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`. Tenant mode: `TENANT_ID`, `TENANT_CLIENT_ID`, and `TENANT_CLIENT_SECRET` or `TENANT_CERT_KEY_FILE` + `TENANT_CERT_THUMBPRINT`, plus `BROKER_PROVISIONER_KEY` (at least 32 characters). `TENANT_LOGIN_URL` and `TENANT_GRAPH_URL` point at a mock in tests. The provisioner also needs `BROKER_URL`, `PROVISIONER_CLIENT_ID` and its own secret or certificate (`PROVISIONER_*`), and optionally `TENANT_FOLDER_NAME` and `TENANT_GRANT_ROLE`. `BROKER_SESSION_REDIRECT_URI` (private mode; defaults to the redirect URI with `callback/` replaced by `session/`). `BROKER_FAKE_PROVIDER=1` enables the test provider, including its browser-facing `/fake/authorize` and `/fake/token` routes (`BROKER_FAKE_PUBLIC_URL`, default `http://localhost:3997`); never set it in production.
 
 The client secrets are optional. Without one, the provider is used as a public PKCE client. That works for Dropbox, and for a Microsoft app whose redirect URI is registered as a public client, but it weakens the design: a stolen refresh token could then be used without the secret.
 

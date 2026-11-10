@@ -80,7 +80,7 @@
       updateElement('manageStorage', controls.html.account.storage, { href: true });
       try {
         const { links } = await fetchJson(controls.account.storage);
-        const names = { onedrive: 'OneDrive', dropbox: 'Dropbox', googledrive: 'Google Drive', fake: 'Test storage' };
+        const names = { onedrive: 'OneDrive', 'onedrive-tenant': 'Work OneDrive', dropbox: 'Dropbox', googledrive: 'Google Drive', fake: 'Test storage' };
         for (const link of links) {
           const li = document.createElement('li');
           li.textContent = `${names[link.provider] ?? link.provider}: ${link.email ?? ''}` +

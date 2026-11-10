@@ -8,12 +8,16 @@ import { FakeProvider, providersFromEnv } from './providers';
  * The OAuth callback lands on CSS (/.account/storage/callback/), which forwards code, state and the
  * browser session's account ID here.
  */
-export function createServer(broker: Broker, serviceKey: string, fake?: FakeProvider, sessionRedirectUri = '') {
-  const expected = Buffer.from(`Bearer ${serviceKey}`);
-  const authorized = (req: Request): boolean => {
+export function createServer(broker: Broker, serviceKey: string, fake?: FakeProvider, sessionRedirectUri = '',
+  provisionerKey?: string) {
+  const matches = (req: Request, key: string): boolean => {
+    const expected = Buffer.from(`Bearer ${key}`);
     const got = Buffer.from(req.headers.get('authorization') ?? '');
     return got.length === expected.length && timingSafeEqual(got, expected);
   };
+  const authorized = (req: Request): boolean => matches(req, serviceKey);
+  // Tenant provisioning has its own key: CSS can't activate links, and the job can't get tokens.
+  const provisioner = (req: Request): boolean => Boolean(provisionerKey) && matches(req, provisionerKey!);
 
   const json = (body: unknown, status = 200, headers: Record<string, string> = {}): Response =>
     Response.json(body, { status, headers: { 'cache-control': 'no-store', ...headers } });
@@ -33,6 +37,12 @@ export function createServer(broker: Broker, serviceKey: string, fake?: FakeProv
     }
     if (fake && url.pathname.startsWith('/fake/')) {
       return fakeBrowserRoutes(fake, req, url);
+    }
+    if (url.pathname.startsWith('/tenant/')) {
+      if (!provisioner(req)) {
+        return json({ error: 'unauthorized' }, 401);
+      }
+      return tenantRoutes(broker, req, url, json);
     }
     if (!authorized(req)) {
       return json({ error: 'unauthorized' }, 401);
@@ -119,6 +129,34 @@ export function createServer(broker: Broker, serviceKey: string, fake?: FakeProv
   };
 }
 
+async function tenantRoutes(broker: Broker, req: Request, url: URL,
+  json: (body: unknown, status?: number) => Response): Promise<Response> {
+  const parts = url.pathname.split('/').filter(Boolean);
+  try {
+    if (req.method === 'GET' && url.pathname === '/tenant/queue') {
+      return json(broker.tenantQueue());
+    }
+    if (req.method === 'POST' && parts[1] === 'links' && parts[3] === 'activate' && parts.length === 4) {
+      const body = await req.json() as Record<string, string>;
+      if (!body.driveId || !body.folderId) {
+        throw new BrokerError(400, 'Missing driveId or folderId.');
+      }
+      return json({ link: await broker.tenantActivate(parts[2], { driveId: body.driveId, folderId: body.folderId, permissionId: body.permissionId }) });
+    }
+    if (req.method === 'POST' && parts[1] === 'links' && parts[3] === 'revoked' && parts.length === 4) {
+      broker.tenantRevoked(parts[2]);
+      return json({ ok: true });
+    }
+    return json({ error: 'not found' }, 404);
+  } catch (error) {
+    if (error instanceof BrokerError) {
+      return json({ error: error.message }, error.status);
+    }
+    console.error(error);
+    return json({ error: 'internal error' }, 500);
+  }
+}
+
 /**
  * The fake provider's browser-facing endpoints, for testing private mode. They exist only when
  * BROKER_FAKE_PROVIDER=1, and are the only routes that skip the service key.
@@ -176,7 +214,10 @@ if (import.meta.main) {
   const fake = providers.get('fake') as FakeProvider | undefined;
   // Private mode's sign-in page sits next to the normal callback: /.account/storage/session/
   const sessionRedirectUri = env.BROKER_SESSION_REDIRECT_URI ?? env.BROKER_REDIRECT_URI.replace(/callback\/?$/u, 'session/');
-  const handler = createServer(broker, serviceKey, fake, sessionRedirectUri);
+  if (env.BROKER_PROVISIONER_KEY && env.BROKER_PROVISIONER_KEY.length < 32) {
+    throw new Error('BROKER_PROVISIONER_KEY must be at least 32 characters.');
+  }
+  const handler = createServer(broker, serviceKey, fake, sessionRedirectUri, env.BROKER_PROVISIONER_KEY);
   const server = env.BROKER_SOCKET ?
     Bun.serve({ unix: env.BROKER_SOCKET, fetch: handler }) :
     Bun.serve({ hostname: env.BROKER_HOST ?? '0.0.0.0', port: Number(env.BROKER_PORT ?? 8600), fetch: handler });

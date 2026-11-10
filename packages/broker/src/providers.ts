@@ -1,6 +1,7 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID, sign } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
-export type ProviderName = 'onedrive' | 'dropbox' | 'googledrive' | 'fake';
+export type ProviderName = 'onedrive' | 'onedrive-tenant' | 'dropbox' | 'googledrive' | 'fake';
 
 export interface TokenSet {
   accessToken: string;
@@ -36,9 +37,19 @@ export interface SessionSupport {
   identifyAccess(accessToken: string): Promise<ProviderAccount>;
 }
 
+/** Tenant mode: no user grants; the broker's own app-only token, confined by per-folder grants. */
+export interface TenantSupport {
+  readonly tenantId: string;
+  /** A client-credentials token for the broker's app. */
+  appToken(): Promise<TokenSet>;
+  /** Proves the app can reach a granted folder, before a link goes live. */
+  checkAccess(accessToken: string, location: { driveId: string; folderId: string }): Promise<void>;
+}
+
 export interface Provider {
   readonly name: ProviderName;
   readonly session?: SessionSupport;
+  readonly tenant?: TenantSupport;
   authorizeUrl(args: { state: string; challenge: string; redirectUri: string; loginHint?: string }): string;
   exchange(code: string, verifier: string, redirectUri: string): Promise<TokenSet>;
   refresh(refreshToken: string): Promise<TokenSet>;
@@ -400,6 +411,119 @@ export class FakeProvider implements Provider {
   }
 }
 
+/** How a confidential client proves itself: a secret, or a certificate (private_key_jwt). */
+export interface ClientCredential {
+  clientId: string;
+  clientSecret?: string;
+  /** PEM private key of a certificate registered on the app, and the certificate's SHA-1 thumbprint (hex). */
+  certificateKeyPem?: string;
+  certificateThumbprint?: string;
+}
+
+/** Form fields that authenticate a confidential client at the Microsoft token endpoint. */
+export function clientAuth(credential: ClientCredential, tokenEndpoint: string): Record<string, string> {
+  if (credential.certificateKeyPem && credential.certificateThumbprint) {
+    const part = (o: unknown): string => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const now = Math.floor(Date.now() / 1000);
+    const header = { alg: 'RS256', typ: 'JWT', x5t: Buffer.from(credential.certificateThumbprint, 'hex').toString('base64url') };
+    const claims = { aud: tokenEndpoint, iss: credential.clientId, sub: credential.clientId, jti: randomUUID(), nbf: now, exp: now + 600 };
+    const input = `${part(header)}.${part(claims)}`;
+    // Production: sign with Cloud KMS (asymmetricSign) so the key never leaves it. The prototype signs locally.
+    const signature = sign('RSA-SHA256', Buffer.from(input), credential.certificateKeyPem).toString('base64url');
+    return {
+      client_id: credential.clientId,
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: `${input}.${signature}`,
+    };
+  }
+  if (!credential.clientSecret) {
+    throw new Error(`No secret or certificate configured for ${credential.clientId}.`);
+  }
+  return { client_id: credential.clientId, client_secret: credential.clientSecret };
+}
+
+/**
+ * OneDrive for an institution's own tenant, without user grants (tenant mode).
+ *
+ * Users sign in once with OpenID Connect, only to prove who they are; no refresh token is kept.
+ * A separate provisioning job then creates their folder and grants this app a role on it
+ * (Files.SelectedOperations.Selected). From then on the broker uses its own app-only token.
+ * Prototype: exercised against test/mock-graph.ts only.
+ */
+export class OneDriveTenantProvider implements Provider {
+  public readonly name = 'onedrive-tenant';
+  public readonly tenant: TenantSupport;
+  private readonly authority: string;
+
+  public constructor(private readonly credential: ClientCredential, tenantId: string, options: { loginUrl?: string; graphUrl?: string } = {}) {
+    this.authority = `${options.loginUrl ?? 'https://login.microsoftonline.com'}/${tenantId}/oauth2/v2.0`;
+    const graph = `${options.graphUrl ?? 'https://graph.microsoft.com'}/v1.0`;
+    this.tenant = {
+      tenantId,
+      appToken: async() => tokenRequest(`${this.authority}/token`, {
+        ...clientAuth(this.credential, `${this.authority}/token`),
+        grant_type: 'client_credentials',
+        scope: 'https://graph.microsoft.com/.default',
+      }),
+      checkAccess: async(accessToken, { driveId, folderId }) => {
+        const res = await fetch(`${graph}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(folderId)}?$select=id,folder`, {
+          headers: { authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) {
+          throw new Error(`The app can't reach that folder yet (${res.status}). Was the grant created?`);
+        }
+      },
+    };
+  }
+
+  private readonly scope = 'openid profile email';
+
+  public authorizeUrl({ state, challenge, redirectUri, loginHint }: { state: string; challenge: string; redirectUri: string; loginHint?: string }): string {
+    const url = new URL(`${this.authority}/authorize`);
+    url.search = new URLSearchParams({
+      client_id: this.credential.clientId,
+      response_type: 'code',
+      redirect_uri: redirectUri,
+      response_mode: 'query',
+      scope: this.scope,
+      state,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      prompt: 'select_account',
+      ...loginHint ? { login_hint: loginHint } : {},
+    }).toString();
+    return url.href;
+  }
+
+  public exchange(code: string, verifier: string, redirectUri: string): Promise<TokenSet> {
+    return tokenRequest(`${this.authority}/token`, {
+      ...clientAuth(this.credential, `${this.authority}/token`),
+      grant_type: 'authorization_code',
+      code,
+      code_verifier: verifier,
+      redirect_uri: redirectUri,
+      scope: this.scope,
+    });
+  }
+
+  public async refresh(): Promise<TokenSet> {
+    throw new Error('Tenant mode keeps no user refresh tokens.');
+  }
+
+  public async identify(tokens: TokenSet): Promise<ProviderAccount> {
+    const claims = decodeJwtClaims(tokens.idToken);
+    if (claims.tid !== this.tenant.tenantId) {
+      throw new Error('That account is not in this institution\'s tenant.');
+    }
+    return { id: claims.oid, email: claims.preferred_username ?? claims.email };
+  }
+
+  public async revoke(): Promise<'unsupported'> {
+    // Nothing per user to revoke here; the provisioning job removes the folder grant.
+    return 'unsupported';
+  }
+}
+
 export function providersFromEnv(env: Record<string, string | undefined>): Map<ProviderName, Provider> {
   const providers = new Map<ProviderName, Provider>();
   if (env.ONEDRIVE_CLIENT_ID) {
@@ -408,6 +532,14 @@ export function providersFromEnv(env: Record<string, string | undefined>): Map<P
       env.ONEDRIVE_TENANT ?? 'common',
       env.GRAPH_URL,
     ));
+  }
+  if (env.TENANT_ID && env.TENANT_CLIENT_ID) {
+    providers.set('onedrive-tenant', new OneDriveTenantProvider({
+      clientId: env.TENANT_CLIENT_ID,
+      clientSecret: env.TENANT_CLIENT_SECRET,
+      certificateKeyPem: env.TENANT_CERT_KEY_FILE ? readFileSync(env.TENANT_CERT_KEY_FILE, 'utf8') : undefined,
+      certificateThumbprint: env.TENANT_CERT_THUMBPRINT,
+    }, env.TENANT_ID, { loginUrl: env.TENANT_LOGIN_URL, graphUrl: env.TENANT_GRAPH_URL }));
   }
   if (env.DROPBOX_CLIENT_ID) {
     providers.set('dropbox', new DropboxProvider({ clientId: env.DROPBOX_CLIENT_ID, clientSecret: env.DROPBOX_CLIENT_SECRET }));

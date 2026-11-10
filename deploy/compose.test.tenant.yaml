@@ -1,0 +1,26 @@
+# Adds tenant mode to the local test stack, against test/mock-graph.ts instead of a real Entra tenant.
+#   docker compose -f deploy/compose.test.yaml -f deploy/compose.test.tenant.yaml up -d
+#   bun test/e2e-tenant.ts
+# The mock is published on 127.0.0.1:3996 so the test (playing the browser and the provisioning job) can reach it.
+services:
+  mock-graph:
+    image: oven/bun:1.3-slim
+    command: ["bun", "/test/mock-graph.ts"]
+    environment:
+      MOCK_GRAPH_PORT: "8700"
+      MOCK_TENANT: mock-tenant-id
+      MOCK_ADMIN_CLIENTS: ubisolid-provisioner
+    volumes: ["../test:/test:ro"]
+    ports: ["127.0.0.1:3996:8700"]
+  broker:
+    depends_on: [mock-graph]
+    environment:
+      TENANT_ID: mock-tenant-id
+      TENANT_CLIENT_ID: ubisolid-broker-app
+      TENANT_CLIENT_SECRET: mock-secret
+      TENANT_LOGIN_URL: http://mock-graph:8700
+      TENANT_GRAPH_URL: http://mock-graph:8700
+      BROKER_PROVISIONER_KEY: test-provisioner-key-test-provisioner-0001
+  css:
+    environment:
+      TENANT_GRAPH_URL: http://mock-graph:8700

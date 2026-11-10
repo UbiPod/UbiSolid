@@ -111,13 +111,13 @@ export class CloudDataAccessor implements DataAccessor {
     if (!adapter) {
       throw new StorageUnavailableHttpError(`No adapter for ${token.provider} on this server.`);
     }
-    const key = `${link.linkId} ${token.provider} ${token.root}`;
+    const key = `${link.linkId} ${token.provider} ${token.root} ${JSON.stringify(token.location ?? {})}`;
     let cache = this.caches.get(key);
     if (!cache) {
       cache = new PodListingCache();
       this.caches.set(key, cache);
     }
-    const fs = cache.wrap(adapter.open(token.accessToken, token.root));
+    const fs = cache.wrap(adapter.open(token.accessToken, token.root, token.location));
     return {
       fs,
       mapper: new CloudPathMapper(link.podBase, fs),

@@ -99,7 +99,7 @@
       setVisibility('storageChoice', true);
       try {
         const { links } = await fetchJson(controls.account.storage);
-        const names = { onedrive: 'OneDrive', dropbox: 'Dropbox', googledrive: 'Google Drive', fake: 'Test storage' };
+        const names = { onedrive: 'OneDrive', 'onedrive-tenant': 'Work OneDrive', dropbox: 'Dropbox', googledrive: 'Google Drive', fake: 'Test storage' };
         const select = document.getElementById('linkId');
         for (const link of links.filter((l) => l.status === 'active')) {
           const option = document.createElement('option');

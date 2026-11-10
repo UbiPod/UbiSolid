@@ -33,6 +33,7 @@
           "pods": { "@id": "urn:css-cloud-storage:PodLinkIndex" },
           "adapters": [
             { "@type": "OneDriveAdapter" },
+            { "@type": "OneDriveTenantAdapter" },
             { "@type": "DropboxAdapter" },
             { "@type": "GoogleDriveAdapter" },
             { "@type": "LocalFolderAdapter" }

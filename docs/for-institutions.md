@@ -68,7 +68,17 @@ For work and school accounts, Microsoft Graph has an app-only permission, `Files
 - **A separate provisioning job creates each user's UbiSolid folder and grants the broker access to it.** This job needs broad SharePoint rights, so it runs apart from the broker, with its own tightly held credential, and only processes requests the broker queues.
 - **The institution can see and control everything in its own tenant.** It can list every grant, apply Conditional Access for workload identities, rotate the certificate, and revoke one folder or all of them.
 
-This doesn't remove concentration completely. One app credential reaches every granted folder, and the access token CSS holds during an hour also reaches every granted folder, not just one pod's. But the credential belongs to the institution and is audited in its own tenant, rather than being a database of user grants run by an app. It only works for an organization's own tenant, not for personal accounts. The prototype is tested against a mock of Graph. The exact grant request (Microsoft's docs show the older `grantedTo` property) and the confinement have not been checked against a real tenant.
+This doesn't remove concentration completely. One app credential reaches every granted folder, and the access token CSS holds during an hour also reaches every granted folder, not just one pod's. But the credential belongs to the institution and is audited in its own tenant, rather than being a database of user grants run by an app. It only works for an organization's own tenant, not for personal accounts.
+
+The prototype is in the broker (`onedrive-tenant`), the [provisioning job](../packages/broker/src/provisioner.ts) and the plugin's `OneDriveTenantAdapter`. [`test/e2e-tenant.ts`](../test/e2e-tenant.ts) runs it against [a mock of Entra and Graph](../test/mock-graph.ts) that enforces per-folder grants. It checks that:
+
+- sign-in asks only for identity
+- no pod can be created before the folder is provisioned
+- CSS's key and the provisioning job's key can't do each other's jobs
+- the app token can't list the drive, write outside the folder, or look up other users
+- disconnecting takes the pod offline at once, removes the grant, and leaves the files
+
+The mock follows Microsoft's documentation. The exact grant request (Microsoft's docs show the older `grantedTo` property) and the confinement have not been checked against a real tenant.
 
 ### Summary
 

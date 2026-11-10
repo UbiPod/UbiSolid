@@ -34,7 +34,8 @@ export interface CloudFs {
 export interface CloudAdapter {
   /** Matches the broker's provider name: onedrive, dropbox, googledrive or fake. */
   readonly provider: string;
-  open: (accessToken: string, root: string) => CloudFs;
+  /** `location` is provider-specific placement from the broker, e.g. the drive and folder in tenant mode. */
+  open: (accessToken: string, root: string, location?: Record<string, string>) => CloudFs;
 }
 
 /** 503: the pod's storage is unreachable or disconnected. */

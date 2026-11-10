@@ -2,23 +2,25 @@
 //   bun test/adapter-conformance.ts fake                      (local folder, no network)
 //   ACCESS_TOKEN=... bun test/adapter-conformance.ts onedrive  (or dropbox, googledrive)
 //   CACHED=1 bun test/adapter-conformance.ts fake               (through PodListingCache)
+//   TENANT_GRAPH_URL=... LOCATION='{"driveId":..,"folderId":..}' ACCESS_TOKEN=... bun test/adapter-conformance.ts onedrive-tenant
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
-import { DropboxAdapter, GoogleDriveAdapter, LocalFolderAdapter, OneDriveAdapter, PodListingCache } from '../packages/css-cloud-storage/dist/index.js';
+import { DropboxAdapter, GoogleDriveAdapter, LocalFolderAdapter, OneDriveAdapter, OneDriveTenantAdapter, PodListingCache } from '../packages/css-cloud-storage/dist/index.js';
 
 const provider = process.argv[2] ?? 'fake';
 const adapters: Record<string, any> = {
   fake: new LocalFolderAdapter(mkdtempSync(join(tmpdir(), 'conf-'))),
   onedrive: new OneDriveAdapter(),
+  'onedrive-tenant': new OneDriveTenantAdapter(),
   dropbox: new DropboxAdapter(),
   googledrive: new GoogleDriveAdapter(),
 };
 const token = provider === 'fake' ? 'fake-at.tester.x' : process.env.ACCESS_TOKEN!;
 const root = `/conformance-${Date.now().toString(36)}`;
 // CACHED=1 runs the same contract through the listing cache CloudDataAccessor puts in front.
-const raw = adapters[provider].open(token, root);
+const raw = adapters[provider].open(token, root, process.env.LOCATION ? JSON.parse(process.env.LOCATION) : undefined);
 const fs = process.env.CACHED ? new PodListingCache().wrap(raw) : raw;
 
 let failures = 0;

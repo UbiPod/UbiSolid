@@ -17,7 +17,8 @@ export interface LinkRow {
   provider_account_id: string;
   account_email: string | null;
   account_id: string;
-  status: 'active' | 'revoked';
+  /** pending and revoking: tenant mode, waiting for the provisioning job. */
+  status: 'active' | 'revoked' | 'pending' | 'revoking';
   created_at: number;
   last_refreshed_at: number | null;
   version: number;
@@ -25,9 +26,18 @@ export interface LinkRow {
   sealed_refresh: string | null;
   /** stored: the broker keeps the refresh token. session: private mode, the owner's browser does. */
   mode: LinkMode;
+  /** Tenant mode: JSON { driveId, folderId, permissionId } once provisioned. */
+  location: string | null;
 }
 
-export type LinkMode = 'stored' | 'session';
+/** stored: the broker keeps the refresh token. session: private mode. tenant: app-only, per-folder grants. */
+export type LinkMode = 'stored' | 'session' | 'tenant';
+
+export interface TenantLocation {
+  driveId: string;
+  folderId: string;
+  permissionId?: string;
+}
 
 export interface PublicLink {
   linkId: string;
@@ -47,6 +57,7 @@ export interface IssuedToken {
   expiresAt: number;
   provider: ProviderName;
   root: string;
+  location?: Record<string, string>;
 }
 
 const PENDING_TTL_MS = 10 * 60_000;
@@ -116,6 +127,9 @@ export class Broker {
     if (!columns.includes('mode')) {
       this.db.exec(`ALTER TABLE links ADD COLUMN mode TEXT NOT NULL DEFAULT 'stored'`);
     }
+    if (!columns.includes('location')) {
+      this.db.exec('ALTER TABLE links ADD COLUMN location TEXT');
+    }
     this.issueLimit = options.issueLimitPerHour ?? 120;
     this.keepWarmAfterMs = options.keepWarmAfterMs ?? 30 * 24 * 3600_000;
     this.now = options.now ?? Date.now;
@@ -174,6 +188,9 @@ export class Broker {
     } catch (error) {
       throw new BrokerError(502, `The provider refused the authorization code: ${(error as Error).message}`);
     }
+    if (p.tenant) {
+      return this.completeTenantLink(p, tokens, accountId);
+    }
     if (!tokens.refreshToken) {
       throw new BrokerError(502, 'The provider did not issue a refresh token.');
     }
@@ -198,6 +215,33 @@ export class Broker {
     }
     this.cache.set(linkId, { accessToken: tokens.accessToken, expiresAt: now + tokens.expiresIn * 1000 });
     return this.publicLink(this.row(linkId)!);
+  }
+
+  /**
+   * Tenant mode: the sign-in only proved who the user is. Their tokens are dropped here; the link waits
+   * for the provisioning job to create their folder and grant the broker's app a role on it.
+   */
+  private async completeTenantLink(p: Provider, tokens: TokenSet, accountId: string): Promise<PublicLink> {
+    let who;
+    try {
+      who = await p.identify(tokens);
+    } catch (error) {
+      throw new BrokerError(403, (error as Error).message);
+    }
+    const existing = this.db.query(`SELECT * FROM links WHERE account_id = ? AND provider = ? AND provider_account_id = ?
+        AND mode = 'tenant'`).get(accountId, p.name, who.id) as LinkRow | null;
+    const now = this.now();
+    if (!existing) {
+      const linkId = randomUUID();
+      this.db.query(`INSERT INTO links (link_id, provider, provider_account_id, account_email, account_id, status,
+          created_at, version, mode) VALUES (?, ?, ?, ?, ?, 'pending', ?, 0, 'tenant')`)
+        .run(linkId, p.name, who.id, who.email ?? null, accountId, now);
+      return this.publicLink(this.row(linkId)!);
+    }
+    if (existing.status === 'revoked') {
+      this.db.query(`UPDATE links SET status = 'pending', version = version + 1 WHERE link_id = ?`).run(existing.link_id);
+    }
+    return this.publicLink(this.row(existing.link_id)!);
   }
 
   // ---------------------------------------------------------------- tokens
@@ -228,6 +272,12 @@ export class Broker {
       throw new BrokerError(410, 'Storage for this pod is disconnected.');
     }
     this.countIssue(linkId);
+    if (row.mode === 'tenant') {
+      const location = JSON.parse(row.location ?? '{}') as TenantLocation;
+      const { accessToken, expiresAt } = await this.appToken(row.provider);
+      return { accessToken, expiresAt, provider: row.provider, root: pod.root,
+        location: { driveId: location.driveId, folderId: location.folderId }};
+    }
     if (row.mode === 'session') {
       const pushed = this.cache.get(linkId);
       if (!pushed || pushed.expiresAt - SESSION_MIN_LEFT_MS <= this.now()) {
@@ -293,6 +343,72 @@ export class Broker {
     const fresh = { accessToken: tokens.accessToken, expiresAt: now + tokens.expiresIn * 1000 };
     this.cache.set(linkId, fresh);
     return fresh;
+  }
+
+  /** Tenant mode: the broker app's own token, shared by every tenant link, in memory only. */
+  private async appToken(provider: ProviderName): Promise<{ accessToken: string; expiresAt: number }> {
+    const key = `app:${provider}`;
+    const cached = this.cache.get(key);
+    if (cached && cached.expiresAt - EARLY_REFRESH_MS > this.now()) {
+      return cached;
+    }
+    let pending = this.inflight.get(key);
+    if (!pending) {
+      pending = (async() => {
+        try {
+          const tokens = await this.provider(provider).tenant!.appToken();
+          const fresh = { accessToken: tokens.accessToken, expiresAt: this.now() + tokens.expiresIn * 1000 };
+          this.cache.set(key, fresh);
+          return fresh;
+        } catch (error) {
+          throw new BrokerError(503, `Getting the app token failed: ${(error as Error).message}`, 30);
+        }
+      })().finally(() => this.inflight.delete(key));
+      this.inflight.set(key, pending);
+    }
+    return pending;
+  }
+
+  // ---------------------------------------------------------------- tenant provisioning
+
+  /**
+   * Work for the provisioning job, which runs separately with its own key and its own admin credential.
+   * provision: create the user's folder and grant the broker's app on it. deprovision: remove that grant.
+   */
+  public tenantQueue(): { provision: object[]; deprovision: object[] } {
+    const rows = this.db.query(`SELECT * FROM links WHERE mode = 'tenant' AND status IN ('pending', 'revoking')`).all() as LinkRow[];
+    return {
+      provision: rows.filter((r) => r.status === 'pending')
+        .map((r) => ({ linkId: r.link_id, provider: r.provider, userId: r.provider_account_id, email: r.account_email })),
+      deprovision: rows.filter((r) => r.status === 'revoking')
+        .map((r) => ({ linkId: r.link_id, provider: r.provider, userId: r.provider_account_id, location: JSON.parse(r.location ?? '{}') })),
+    };
+  }
+
+  /** The job created the folder and the grant. The link goes live only if the broker's app can really reach it. */
+  public async tenantActivate(linkId: string, location: TenantLocation): Promise<PublicLink> {
+    const row = this.row(linkId);
+    if (!row || row.mode !== 'tenant' || row.status !== 'pending') {
+      throw new BrokerError(409, 'That link is not waiting to be provisioned.');
+    }
+    const { accessToken } = await this.appToken(row.provider);
+    try {
+      await this.provider(row.provider).tenant!.checkAccess(accessToken, location);
+    } catch (error) {
+      throw new BrokerError(409, (error as Error).message);
+    }
+    this.db.query(`UPDATE links SET status = 'active', location = ?, last_refreshed_at = ?, version = version + 1
+        WHERE link_id = ? AND status = 'pending'`).run(JSON.stringify(location), this.now(), linkId);
+    return this.publicLink(this.row(linkId)!);
+  }
+
+  /** The job removed the grant. */
+  public tenantRevoked(linkId: string): void {
+    const row = this.row(linkId);
+    if (!row || row.mode !== 'tenant' || row.status !== 'revoking') {
+      throw new BrokerError(409, 'That link is not waiting to be deprovisioned.');
+    }
+    this.db.query(`UPDATE links SET status = 'revoked', location = NULL, version = version + 1 WHERE link_id = ?`).run(linkId);
   }
 
   /** Refresh Google links that have been idle long enough to risk the 6-month inactivity expiry. */
@@ -430,6 +546,12 @@ export class Broker {
     const row = this.row(linkId);
     if (!row || row.account_id !== accountId) {
       throw new BrokerError(404, 'No such link for this account.');
+    }
+    if (row.mode === 'tenant') {
+      // Pods go offline at once; the provisioning job removes the folder grant.
+      this.db.query(`UPDATE links SET status = CASE WHEN location IS NULL THEN 'revoked' ELSE 'revoking' END,
+          version = version + 1 WHERE link_id = ?`).run(linkId);
+      return { provider: row.provider, revokedAtProvider: row.location ? 'queued' : 'skipped' };
     }
     let revokedAtProvider = 'skipped';
     if (row.status === 'active' && row.wrapped_dek && row.sealed_refresh) {

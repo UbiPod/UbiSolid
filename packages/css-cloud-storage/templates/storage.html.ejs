@@ -25,7 +25,7 @@
 <p class="actions"><button type="button" id="account-link">Back</button></p>
 
 <script>
-  const names = { onedrive: 'OneDrive', dropbox: 'Dropbox', googledrive: 'Google Drive', fake: 'Test storage' };
+  const names = { onedrive: 'OneDrive', 'onedrive-tenant': 'Work OneDrive', dropbox: 'Dropbox', googledrive: 'Google Drive', fake: 'Test storage' };
   const showError = (message) => updateElement('error', message, { innerText: true });
 
   (async() => {
@@ -49,7 +49,11 @@
       const label = document.createElement('strong');
       label.textContent = names[link.provider] ?? link.provider;
       li.append(label, ` ${link.email ?? ''} `);
-      if (link.status !== 'active') {
+      if (link.status === 'pending') {
+        li.append('(waiting for your institution to set up your folder) ');
+      } else if (link.status === 'revoking') {
+        li.append('(disconnecting) ');
+      } else if (link.status !== 'active') {
         li.append('(disconnected) ');
       } else if (link.mode === 'session') {
         li.append(link.onlineUntil ?
@@ -66,7 +70,7 @@
       if (link.pods.length) {
         li.append(`· pods: ${link.pods.join(', ')} `);
       }
-      if (link.status === 'active') {
+      if (link.status === 'active' || link.status === 'pending') {
         const button = document.createElement('button');
         button.type = 'button';
         button.textContent = 'Disconnect';
@@ -81,7 +85,9 @@
           if (res.status >= 400) {
             return showError(body.message);
           }
-          if (body.revokedAtProvider === 'unsupported') {
+          if (body.revokedAtProvider === 'queued') {
+            alert('Disconnected. Your institution will remove this server\'s access to the folder shortly; the files stay in your OneDrive.');
+          } else if (body.revokedAtProvider === 'unsupported') {
             alert('Disconnected. Microsoft has no way for us to withdraw the permission, so also remove the app at ' +
               'https://account.live.com/consent/Manage (personal) or https://myapps.microsoft.com (work or school).');
           }
