@@ -97,6 +97,13 @@
       "relativePath": "storage/callback/"
     },
     {
+      "comment": "Private mode: the page that signs in to the provider in the browser and keeps the pod online. Register it as a single-page-app redirect URI.",
+      "@id": "urn:css-cloud-storage:StorageSessionRoute",
+      "@type": "RelativePathInteractionRoute",
+      "base": { "@id": "urn:solid-server:default:IndexRoute" },
+      "relativePath": "storage/session/"
+    },
+    {
       "@id": "urn:solid-server:default:InteractionRouteHandler",
       "@type": "WaterfallHandler",
       "handlers": [
@@ -147,6 +154,12 @@
           "@type": "PluginHtmlViewEntry",
           "route": { "@id": "urn:css-cloud-storage:StorageCallbackRoute" },
           "template": "storage-callback.html.ejs"
+        },
+        {
+          "@id": "urn:css-cloud-storage:StorageSessionHtml",
+          "@type": "PluginHtmlViewEntry",
+          "route": { "@id": "urn:css-cloud-storage:StorageSessionRoute" },
+          "template": "storage-session.html.ejs"
         }
       ]
     },

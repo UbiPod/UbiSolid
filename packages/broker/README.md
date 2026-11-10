@@ -24,16 +24,18 @@ A small Bun service (SQLite, no dependencies) that holds the long-lived provider
 | `GET /links?accountId=` | the account's links |
 | `DELETE /links/{id}?accountId=` | revoke and shred |
 | `GET /pods`, `PUT /pods {podBase, linkId, accountId}`, `DELETE /pods {podBase, accountId}` | pod bindings |
+| `POST /session/config {provider}` | private mode: endpoints, client ID and redirect URI for the browser's own sign-in |
+| `POST /session/push {provider, accountId, accessToken, expiresIn}` | private mode: an access token from the owner's browser. The provider confirms whose it is; it's kept in memory only, for at most 2 hours |
 | `GET /healthz` | no auth |
 
 ## Environment
 
-`BROKER_SERVICE_KEY` (at least 32 characters), `BROKER_REDIRECT_URI`, `BROKER_KMS_KEY` or `BROKER_MASTER_KEY`/`BROKER_MASTER_KEY_FILE`, `BROKER_DB`, `BROKER_PORT` or `BROKER_SOCKET`. Then for each provider: `ONEDRIVE_CLIENT_ID`/`_SECRET`/`ONEDRIVE_TENANT`, `DROPBOX_CLIENT_ID`/`_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`. `BROKER_FAKE_PROVIDER=1` enables the test provider; never set it in production.
+`BROKER_SERVICE_KEY` (at least 32 characters), `BROKER_REDIRECT_URI`, `BROKER_KMS_KEY` or `BROKER_MASTER_KEY`/`BROKER_MASTER_KEY_FILE`, `BROKER_DB`, `BROKER_PORT` or `BROKER_SOCKET`. Then for each provider: `ONEDRIVE_CLIENT_ID`/`_SECRET`/`ONEDRIVE_TENANT`, `DROPBOX_CLIENT_ID`/`_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET`. `BROKER_SESSION_REDIRECT_URI` (private mode; defaults to the redirect URI with `callback/` replaced by `session/`). `BROKER_FAKE_PROVIDER=1` enables the test provider, including its browser-facing `/fake/authorize` and `/fake/token` routes (`BROKER_FAKE_PUBLIC_URL`, default `http://localhost:3997`); never set it in production.
 
 The client secrets are optional. Without one, the provider is used as a public PKCE client. That works for Dropbox, and for a Microsoft app whose redirect URI is registered as a public client, but it weakens the design: a stolen refresh token could then be used without the secret.
 
 ```
-bun test        # 8 unit tests: binding, single use state, single-flight refresh, rotation, invalid_grant, rate limit, unlink
+bun test        # 10 unit tests: binding, single use state, single-flight refresh, rotation, invalid_grant, rate limit, unlink, private mode
 ```
 
 `GcpKmsKeyWrapper` hasn't been run against Cloud KMS yet.

@@ -39,6 +39,48 @@ A university already has a way to let an app use OneDrive: the app registers wit
 - **It's slower than talking to Graph directly.** Each Solid request becomes one or more Graph calls, and every call is a network round trip of about a second. With caching, a cold read takes 1.5–4 seconds and a repeat read takes milliseconds. Creating a pod takes 15–35 seconds. That's fine for documents and settings, but not for anything chatty.
 - **It's new.** This is version 0.1: one person's implementation, with no independent security review. It has been tested against personal OneDrive accounts only. Whether `Files.ReadWrite.AppFolder` confines an app the same way on OneDrive for Business is an [open question](token-broker-design.md#open-questions) that needs a JMU test app.
 
+## Alternatives that reduce the concentrated risk
+
+The risk above comes from one service holding a long-lived Microsoft grant for every user. Three designs change who holds that grant. They suit different accounts, so UbiSolid offers all three.
+
+**Not an alternative: PKCE alone.** The broker already uses PKCE on every sign-in. PKCE protects the authorization code on its way back from Microsoft; it does nothing for tokens once they're stored. Dropping the client secret, so that the broker runs as a "PKCE-only" public client, would make things worse. A copy of the token database would then be enough to mint access tokens. With a secret, an attacker also needs the secret.
+
+### 1. Stored grant (the default, for personal accounts)
+
+The broker keeps the refresh token, sealed with a per-user key that Cloud KMS wraps. Pods are always online, and other people's apps can read what the owner shared even while the owner is away. The risk is the one described above. Limits on the damage:
+
+- the app-folder scope, so a breach exposes the UbiSolid folder, not the whole drive
+- the KMS key, which only the broker can use
+- no public endpoint on the broker
+- hour-long, per-pod access tokens in CSS
+
+### 2. Private mode (opt-in): the browser holds the grant
+
+The owner's browser signs in to Microsoft itself, as a single-page app with PKCE. It keeps the refresh token in memory, and each hour it hands the server a fresh access token. The server never sees a refresh token, so there is nothing long-lived to steal from it. A copy of its disk gets nothing at all, and a server compromised while running gets an hour of access to the pods whose owners are online at the time.
+
+The trade-off is availability. The pod is online only while the owner has the private-mode page open, plus up to an hour after they close it. Microsoft caps refresh tokens for single-page apps at 24 hours, so owners sign in at least daily. It suits people who use their pod only themselves, or who want to know their data can't be reached while they're away. One known weakness: CSS serves pod content from the same origin as its account pages, so a malicious HTML page in another pod, opened in the same browser, could reach the private-mode page's tokens. Serving that page from its own origin would close the gap, but the prototype doesn't do that yet.
+
+### 3. Tenant mode (for an institution's own accounts): no user grants at all
+
+For work and school accounts, Microsoft Graph has an app-only permission, `Files.SelectedOperations.Selected`. By itself it grants nothing. An administrator then gives the app a role on specific folders, and a grant on a folder covers the files inside it ([Microsoft Learn](https://learn.microsoft.com/graph/permissions-selected-overview)). In tenant mode:
+
+- **The broker signs in as itself,** with a certificate whose private key stays in KMS or an HSM. It stores no user tokens.
+- **A separate provisioning job creates each user's UbiSolid folder and grants the broker access to it.** This job needs broad SharePoint rights, so it runs apart from the broker, with its own tightly held credential, and only processes requests the broker queues.
+- **The institution can see and control everything in its own tenant.** It can list every grant, apply Conditional Access for workload identities, rotate the certificate, and revoke one folder or all of them.
+
+This doesn't remove concentration completely. One app credential reaches every granted folder, and the access token CSS holds during an hour also reaches every granted folder, not just one pod's. But the credential belongs to the institution and is audited in its own tenant, rather than being a database of user grants run by an app. It only works for an organization's own tenant, not for personal accounts. The prototype is tested against a mock of Graph. The exact grant request (Microsoft's docs show the older `grantedTo` property) and the confinement have not been checked against a real tenant.
+
+### Summary
+
+| | Stored grant | Private mode | Tenant mode |
+| --- | --- | --- | --- |
+| Long-lived secret on the server | Every user's refresh token (sealed) | None | One app certificate (in KMS/HSM) |
+| A copy of the server's disk gives | Nothing without the KMS key and client secret | Nothing | Nothing without the certificate key |
+| A compromise of the running server gives | Every pod's folder, for as long as it lasts | Online owners' pods, for an hour | Every granted folder, for as long as it lasts |
+| Pod availability | Always | While the owner's page is open, plus up to an hour | Always |
+| Accounts | Personal and work | Personal and work (needs a single-page-app redirect URI) | The institution's tenant only |
+| Who can revoke | User, at the provider; operator, by unlinking | User, by closing the page | IT, centrally, per folder or all at once |
+
 ## When each is the better choice
 
 UbiSolid fits when:

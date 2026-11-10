@@ -1,0 +1,143 @@
+<h1>Private mode</h1>
+<p class="error" id="error"></p>
+<p id="status">Starting…</p>
+<p id="explain" class="hidden">
+  Keep this tab open. In private mode this server never receives your long-lived permission:
+  this tab holds it, in memory only, and every hour hands the server a fresh access token.
+  Your private-mode pods are online while this tab is open, and go offline within an hour after you close it.
+  To bring them back, open private mode again from <em>Connected storage</em>.
+</p>
+<p class="actions">
+  <button type="button" id="restart" class="hidden">Sign in again</button>
+  <a id="back" class="link" href="">Back to connected storage</a>
+</p>
+
+<script>
+  (() => {
+    const PKCE_KEY = 'ubisolid-private-mode-pkce';
+    const status = (text) => updateElement('status', text, { innerText: true });
+    const fail = (message) => {
+      updateElement('error', message, { innerText: true });
+      setVisibility('status', false);
+    };
+    const b64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)))
+      .replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '');
+    const random = () => b64url(crypto.getRandomValues(new Uint8Array(32)));
+
+    // Held in this closure only: not in storage, not on window.
+    let session;
+
+    async function startSignIn(storageUrl, provider) {
+      if (!crypto.subtle) {
+        throw new Error('Private mode needs a secure page (https, or localhost).');
+      }
+      const res = await postJson(storageUrl, { sessionConfig: provider });
+      const config = await res.json();
+      if (res.status >= 400) {
+        throw new Error(config.message);
+      }
+      const verifier = random();
+      const state = random();
+      const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+      // Only the single-use PKCE verifier survives the trip to the provider, and only in this tab.
+      sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state, provider, config }));
+      const url = new URL(config.authorizeEndpoint);
+      url.search = new URLSearchParams({
+        client_id: config.clientId,
+        response_type: 'code',
+        redirect_uri: config.redirectUri,
+        scope: config.scope,
+        state,
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+        ...config.params,
+      }).toString();
+      location.href = url.href;
+    }
+
+    async function tokenRequest(config, form) {
+      const res = await fetch(config.tokenEndpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: config.clientId, scope: config.scope, ...form }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.access_token) {
+        throw new Error(`The provider refused: ${body.error_description ?? body.error ?? res.status}`);
+      }
+      return body;
+    }
+
+    async function push(storageUrl, tokens) {
+      const res = await postJson(storageUrl, {
+        session: { provider: session.provider, accessToken: tokens.access_token, expiresIn: Number(tokens.expires_in) },
+      });
+      const body = await res.json();
+      if (res.status >= 400) {
+        throw new Error(body.message);
+      }
+      const until = body.link.onlineUntil ? new Date(body.link.onlineUntil).toLocaleTimeString() : 'soon';
+      const pods = body.link.pods.length ? ` Pods: ${body.link.pods.join(', ')}.` : ' No pods use it yet.';
+      status(`Online. The server has a token until ${until}; this tab renews it before then.${pods}`);
+      setVisibility('explain', true);
+      // Renew ten minutes early: timers in background tabs can run late.
+      const lifetime = Number(tokens.expires_in) || 3600;
+      setTimeout(() => renew(storageUrl), Math.max(lifetime - 600, 30) * 1000);
+    }
+
+    async function renew(storageUrl) {
+      try {
+        const tokens = await tokenRequest(session.config, { grant_type: 'refresh_token', refresh_token: session.refreshToken });
+        session.refreshToken = tokens.refresh_token ?? session.refreshToken;
+        await push(storageUrl, tokens);
+      } catch (error) {
+        session = undefined;
+        fail(`Private mode stopped: ${error.message}. Your private-mode pods will go offline.`);
+        setVisibility('restart', true);
+      }
+    }
+
+    (async() => {
+      const params = new URLSearchParams(location.search);
+      history.replaceState(null, '', location.pathname);
+      const controls = await fetchControls('<%= idpIndex %>');
+      if (!controls.account?.storage) {
+        throw new Error('You need to be logged in to this server in this browser. Log in, then try again.');
+      }
+      const storageUrl = controls.account.storage;
+      updateElement('back', controls.html.account.storage, { href: true });
+
+      if (params.get('start')) {
+        status('Sending you to sign in…');
+        return startSignIn(storageUrl, params.get('start'));
+      }
+
+      const saved = JSON.parse(sessionStorage.getItem(PKCE_KEY) ?? 'null');
+      sessionStorage.removeItem(PKCE_KEY);
+      if (params.get('error')) {
+        throw new Error(`The provider said: ${params.get('error_description') ?? params.get('error')}`);
+      }
+      if (!params.get('code')) {
+        throw new Error('Private mode isn\'t running in this tab. Start it from Connected storage.');
+      }
+      if (!saved || saved.state !== params.get('state')) {
+        throw new Error('This sign-in didn\'t start in this tab, or was already used. Start again.');
+      }
+      document.getElementById('restart').addEventListener('click', () => startSignIn(storageUrl, saved.provider));
+      status('Signing in…');
+      const tokens = await tokenRequest(saved.config, {
+        grant_type: 'authorization_code',
+        code: params.get('code'),
+        redirect_uri: saved.config.redirectUri,
+        code_verifier: saved.verifier,
+      });
+      session = { provider: saved.provider, config: saved.config, refreshToken: tokens.refresh_token };
+      await push(storageUrl, tokens);
+      window.addEventListener('beforeunload', (event) => {
+        if (session) {
+          event.preventDefault();
+        }
+      });
+    })().catch((error) => fail(error.message));
+  })();
+</script>

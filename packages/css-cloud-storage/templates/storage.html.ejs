@@ -12,6 +12,16 @@
 <h2>Connect</h2>
 <p id="providers" class="actions"></p>
 
+<div id="privateMode" class="hidden">
+  <h2>Private mode</h2>
+  <p>
+    In private mode this server never holds your long-lived permission. Your browser keeps it while a
+    private-mode tab is open, and your pods are only online while it is (plus up to an hour).
+    Use it if only you use your pod, or if you don't want your files reachable while you're away.
+  </p>
+  <p id="sessionProviders" class="actions"></p>
+</div>
+
 <p class="actions"><button type="button" id="account-link">Back</button></p>
 
 <script>
@@ -26,7 +36,8 @@
       return;
     }
     const url = controls.account.storage;
-    const { providers, links } = await fetchJson(url);
+    const { providers, sessionProviders = [], links } = await fetchJson(url);
+    const sessionPage = new URL('storage/session/', '<%= idpIndex %>');
 
     const list = document.getElementById('links');
     list.textContent = '';
@@ -40,6 +51,17 @@
       li.append(label, ` ${link.email ?? ''} `);
       if (link.status !== 'active') {
         li.append('(disconnected) ');
+      } else if (link.mode === 'session') {
+        li.append(link.onlineUntil ?
+          `(private mode, online until ${new Date(link.onlineUntil).toLocaleTimeString()}) ` :
+          '(private mode, offline) ');
+        if (!link.onlineUntil) {
+          const resume = document.createElement('a');
+          resume.className = 'link';
+          resume.href = `${sessionPage.href}?start=${encodeURIComponent(link.provider)}`;
+          resume.textContent = 'Bring online';
+          li.append(resume, ' ');
+        }
       }
       if (link.pods.length) {
         li.append(`· pods: ${link.pods.join(', ')} `);
@@ -84,6 +106,20 @@
         location.href = body.authorizeUrl;
       });
       buttons.append(button, ' ');
+    }
+
+    if (sessionProviders.length) {
+      setVisibility('privateMode', true);
+      const privateButtons = document.getElementById('sessionProviders');
+      for (const provider of sessionProviders) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = `Connect ${names[provider] ?? provider} in private mode`;
+        button.addEventListener('click', () => {
+          location.href = `${sessionPage.href}?start=${encodeURIComponent(provider)}`;
+        });
+        privateButtons.append(button, ' ');
+      }
     }
   })().catch((error) => showError(error.message));
 </script>

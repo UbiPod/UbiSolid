@@ -117,3 +117,38 @@ test('relinking the same provider account reuses the link', async() => {
   expect(b.linkId).toBe(a.linkId);
   expect(broker.links('acct-1')).toHaveLength(1);
 });
+
+test('private mode: pushed tokens keep the pod online, nothing long-lived is stored, and it goes offline', async() => {
+  let clock = 1_000_000;
+  const { broker, fake, dbPath } = setup(() => clock);
+  // The browser signs in by itself; the broker only sees the access token.
+  const browser = await fake.publicToken(new URLSearchParams({ grant_type: 'authorization_code', code: 'fake-code.carol', code_verifier: 'v' }));
+  const l = await broker.pushSessionToken('acct-3', 'fake', browser.accessToken, 600);
+  expect(l.mode).toBe('session');
+  expect(l.onlineUntil).toBeDefined();
+  broker.bindPod('https://pod.test/carol/', l.linkId, 'acct-3');
+  const t = await broker.token(l.linkId, 'https://pod.test/carol/');
+  expect(t.accessToken).toBe(browser.accessToken);
+  const raw = JSON.stringify(new Database(dbPath).query('SELECT * FROM links').all());
+  expect(raw).not.toContain('fake-rt.');
+  expect(raw).not.toContain('fake-at.');
+  // A second push for the same drive reuses the link.
+  const again = await broker.pushSessionToken('acct-3', 'fake', `fake-at.carol.${'b'.repeat(16)}`, 600);
+  expect(again.linkId).toBe(l.linkId);
+  // The owner closes the page: once the token runs out, the pod is offline (503), not disconnected.
+  clock += 600_000;
+  const offline = await broker.token(l.linkId, 'https://pod.test/carol/').catch((e: BrokerError) => e);
+  expect((offline as BrokerError).status).toBe(503);
+  expect(broker.links('acct-3')[0].onlineUntil).toBeUndefined();
+  expect(fake.refreshCount).toBe(0);
+});
+
+test('private mode: a token the provider does not recognise is refused, and expiry claims are capped', async() => {
+  let clock = 1_000_000;
+  const { broker } = setup(() => clock);
+  await expect(broker.pushSessionToken('acct-4', 'fake', 'not-a-token', 600)).rejects.toThrow('didn');
+  const l = await broker.pushSessionToken('acct-4', 'fake', 'fake-at.dave.x', 10 * 24 * 3600);
+  broker.bindPod('https://pod.test/dave/', l.linkId, 'acct-4');
+  clock += 3 * 3600_000;
+  await expect(broker.token(l.linkId, 'https://pod.test/dave/')).rejects.toThrow('private mode');
+});

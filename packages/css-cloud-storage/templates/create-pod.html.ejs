@@ -104,7 +104,7 @@
         for (const link of links.filter((l) => l.status === 'active')) {
           const option = document.createElement('option');
           option.value = link.linkId;
-          option.textContent = `${names[link.provider] ?? link.provider}${link.email ? ` (${link.email})` : ''}`;
+          option.textContent = `${names[link.provider] ?? link.provider}${link.email ? ` (${link.email})` : ''}${link.mode === 'session' ? ' · private mode' : ''}`;
           select.append(option);
         }
         if (select.options.length > 1) {
@@ -134,7 +134,7 @@
     addPostListener(async() => {
       const submit = mainForm.querySelector('button[type="submit"]');
       const select = document.getElementById('linkId');
-      const where = select.value ? select.options[select.selectedIndex].textContent.replace(/ \(.*\)$/u, '') : '';
+      const where = select.value ? select.options[select.selectedIndex].textContent.replace(/ [(·].*$/u, '') : '';
       // Creating a pod in cloud storage takes a dozen round trips to the provider.
       submit.disabled = true;
       setError('');

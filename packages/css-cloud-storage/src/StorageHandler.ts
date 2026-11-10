@@ -5,10 +5,13 @@ import type { TokenBrokerClient } from './TokenBrokerClient';
 /**
  * The account's connected storage, at /.account/account/<id>/storage/.
  *
- * - GET: `{ providers, links }`
+ * - GET: `{ providers, sessionProviders, links }`
  * - POST `{ provider }`: starts linking; returns `{ authorizeUrl }` to send the browser to.
  * - POST `{ code, state }`: finishes linking (posted by the callback page); returns `{ link }`.
  * - POST `{ unlink: "<linkId>" }`: revokes at the provider and shreds the stored grant.
+ * - POST `{ sessionConfig: "<provider>" }`: private mode; what the browser needs to sign in to the provider itself.
+ * - POST `{ session: { provider, accessToken, expiresIn } }`: private mode; an access token from the owner's
+ *   browser. Creates the private-mode link on first use and keeps it online.
  *
  * The broker ties each link request to the account that started it, and this handler only ever passes the
  * logged-in account's ID, so a callback URL sent to someone else can't link storage across accounts.
@@ -20,8 +23,8 @@ export class StorageHandler extends JsonInteractionHandler implements JsonView {
 
   public async getView({ accountId }: JsonInteractionHandlerInput): Promise<JsonRepresentation> {
     assertAccountId(accountId);
-    const [ providers, links ] = await Promise.all([ this.broker.providers(), this.broker.links(accountId) ]);
-    return { json: { providers, links: links as any }};
+    const [ info, links ] = await Promise.all([ this.broker.providerInfo(), this.broker.links(accountId) ]);
+    return { json: { providers: info.providers, sessionProviders: info.session, links: links as any }};
   }
 
   public async handle({ accountId, json }: JsonInteractionHandlerInput): Promise<JsonRepresentation> {
@@ -36,6 +39,14 @@ export class StorageHandler extends JsonInteractionHandler implements JsonView {
     if (typeof body.unlink === 'string') {
       return { json: await this.broker.unlink(body.unlink, accountId) };
     }
-    throw new BadRequestHttpError('Expected { provider }, { code, state } or { unlink }.');
+    if (typeof body.sessionConfig === 'string') {
+      return { json: await this.broker.sessionConfig(body.sessionConfig) as any };
+    }
+    const session = body.session as Record<string, unknown> | undefined;
+    if (session && typeof session.provider === 'string' && typeof session.accessToken === 'string') {
+      const link = await this.broker.pushSession(session.provider, accountId, session.accessToken, Number(session.expiresIn));
+      return { json: { link: link as any }};
+    }
+    throw new BadRequestHttpError('Expected { provider }, { code, state }, { unlink }, { sessionConfig } or { session }.');
   }
 }

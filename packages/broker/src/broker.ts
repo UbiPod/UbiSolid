@@ -23,7 +23,11 @@ export interface LinkRow {
   version: number;
   wrapped_dek: string | null;
   sealed_refresh: string | null;
+  /** stored: the broker keeps the refresh token. session: private mode, the owner's browser does. */
+  mode: LinkMode;
 }
+
+export type LinkMode = 'stored' | 'session';
 
 export interface PublicLink {
   linkId: string;
@@ -33,6 +37,9 @@ export interface PublicLink {
   createdAt: string;
   lastRefreshedAt?: string;
   pods: string[];
+  mode: LinkMode;
+  /** Private mode: until when the owner's browser has given us a token. */
+  onlineUntil?: string;
 }
 
 export interface IssuedToken {
@@ -43,6 +50,10 @@ export interface IssuedToken {
 }
 
 const PENDING_TTL_MS = 10 * 60_000;
+/** Private mode: a pushed token with less left than this counts as offline. */
+const SESSION_MIN_LEFT_MS = 60_000;
+/** Private mode: never trust a pushed expiry further out than this. */
+const SESSION_MAX_MS = 2 * 3600_000;
 const EARLY_REFRESH_MS = 5 * 60_000;
 
 export interface BrokerOptions {
@@ -101,6 +112,10 @@ export class Broker {
         created_at INTEGER NOT NULL
       );
     `);
+    const columns = (this.db.query('PRAGMA table_info(links)').all() as { name: string }[]).map((c) => c.name);
+    if (!columns.includes('mode')) {
+      this.db.exec(`ALTER TABLE links ADD COLUMN mode TEXT NOT NULL DEFAULT 'stored'`);
+    }
     this.issueLimit = options.issueLimitPerHour ?? 120;
     this.keepWarmAfterMs = options.keepWarmAfterMs ?? 30 * 24 * 3600_000;
     this.now = options.now ?? Date.now;
@@ -108,6 +123,11 @@ export class Broker {
 
   public providerNames(): ProviderName[] {
     return [ ...this.providers.keys() ];
+  }
+
+  /** Providers that support private mode. */
+  public sessionProviderNames(): ProviderName[] {
+    return [ ...this.providers.values() ].filter((p) => p.session).map((p) => p.name);
   }
 
   private provider(name: string): Provider {
@@ -160,8 +180,8 @@ export class Broker {
     const who = await p.identify(tokens);
 
     // Relinking the same provider account replaces the old grant in place (Google caps live refresh tokens).
-    const existing = this.db.query('SELECT * FROM links WHERE account_id = ? AND provider = ? AND provider_account_id = ?')
-      .get(accountId, p.name, who.id) as LinkRow | null;
+    const existing = this.db.query(`SELECT * FROM links WHERE account_id = ? AND provider = ? AND provider_account_id = ?
+        AND mode = 'stored'`).get(accountId, p.name, who.id) as LinkRow | null;
     const linkId = existing?.link_id ?? randomUUID();
     const dek = randomBytes(32);
     const wrapped = await this.keys.wrap(dek);
@@ -208,6 +228,13 @@ export class Broker {
       throw new BrokerError(410, 'Storage for this pod is disconnected.');
     }
     this.countIssue(linkId);
+    if (row.mode === 'session') {
+      const pushed = this.cache.get(linkId);
+      if (!pushed || pushed.expiresAt - SESSION_MIN_LEFT_MS <= this.now()) {
+        throw new BrokerError(503, 'This pod is in private mode and its owner is not connected right now.');
+      }
+      return { ...pushed, provider: row.provider, root: pod.root };
+    }
     const { accessToken, expiresAt } = await this.accessToken(row);
     return { accessToken, expiresAt, provider: row.provider, root: pod.root };
   }
@@ -270,7 +297,7 @@ export class Broker {
 
   /** Refresh Google links that have been idle long enough to risk the 6-month inactivity expiry. */
   public async keepWarm(): Promise<number> {
-    const rows = this.db.query(`SELECT * FROM links WHERE status = 'active' AND provider = 'googledrive'
+    const rows = this.db.query(`SELECT * FROM links WHERE status = 'active' AND provider = 'googledrive' AND mode = 'stored'
         AND COALESCE(last_refreshed_at, created_at) < ?`).all(this.now() - this.keepWarmAfterMs) as LinkRow[];
     let refreshed = 0;
     for (const row of rows) {
@@ -283,6 +310,50 @@ export class Broker {
       }
     }
     return refreshed;
+  }
+
+  // ---------------------------------------------------------------- private mode
+
+  public sessionConfig(provider: string, redirectUri: string): ReturnType<NonNullable<Provider['session']>['config']> {
+    const p = this.provider(provider);
+    if (!p.session) {
+      throw new BrokerError(400, `${provider} doesn't support private mode.`);
+    }
+    return p.session.config(redirectUri);
+  }
+
+  /**
+   * Private mode: the owner's browser hands over an access token it got from the provider itself.
+   * The provider tells us whose it is. The first push creates the link; later pushes keep it online.
+   * Nothing is written to disk except the link's metadata.
+   */
+  public async pushSessionToken(accountId: string, provider: string, accessToken: string, expiresIn: number):
+  Promise<PublicLink> {
+    const p = this.provider(provider);
+    if (!p.session) {
+      throw new BrokerError(400, `${provider} doesn't support private mode.`);
+    }
+    let who;
+    try {
+      who = await p.session.identifyAccess(accessToken);
+    } catch (error) {
+      throw new BrokerError(400, `The provider didn't accept that token: ${(error as Error).message}`);
+    }
+    let row = this.db.query(`SELECT * FROM links WHERE account_id = ? AND provider = ? AND provider_account_id = ?
+        AND mode = 'session'`).get(accountId, p.name, who.id) as LinkRow | null;
+    const now = this.now();
+    if (!row) {
+      const linkId = randomUUID();
+      this.db.query(`INSERT INTO links (link_id, provider, provider_account_id, account_email, account_id, status,
+          created_at, last_refreshed_at, version, mode) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 0, 'session')`)
+        .run(linkId, p.name, who.id, who.email ?? null, accountId, now, now);
+      row = this.row(linkId)!;
+    } else {
+      this.db.query(`UPDATE links SET status = 'active', last_refreshed_at = ? WHERE link_id = ?`).run(now, row.link_id);
+    }
+    const lifetime = Math.min(Math.max(Number(expiresIn) || 0, 0) * 1000, SESSION_MAX_MS);
+    this.cache.set(row.link_id, { accessToken, expiresAt: now + lifetime });
+    return this.publicLink(this.row(row.link_id)!);
   }
 
   // ---------------------------------------------------------------- pods
@@ -334,7 +405,16 @@ export class Broker {
       createdAt: new Date(row.created_at).toISOString(),
       lastRefreshedAt: row.last_refreshed_at ? new Date(row.last_refreshed_at).toISOString() : undefined,
       pods,
+      mode: row.mode,
+      ...row.mode === 'session' ? { onlineUntil: this.onlineUntil(row.link_id) } : {},
     };
+  }
+
+  private onlineUntil(linkId: string): string | undefined {
+    const pushed = this.cache.get(linkId);
+    return pushed && pushed.expiresAt - SESSION_MIN_LEFT_MS > this.now() ?
+      new Date(pushed.expiresAt - SESSION_MIN_LEFT_MS).toISOString() :
+      undefined;
   }
 
   public links(accountId: string): PublicLink[] {

@@ -22,6 +22,9 @@ export interface StorageLink {
   createdAt: string;
   lastRefreshedAt?: string;
   pods: string[];
+  /** stored: the broker keeps the grant. session: private mode, the owner's browser does. */
+  mode?: string;
+  onlineUntil?: string;
 }
 
 const EARLY_MS = 5 * 60_000;
@@ -103,13 +106,28 @@ export class TokenBrokerClient {
     return pending;
   }
 
+  /** Forget every cached token for a link. */
+  public invalidateLink(linkId: string): void {
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(`${linkId} `)) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
   /** Forget a cached token, e.g. after the provider rejected it. */
   public invalidate(linkId: string, podBase: string): void {
     this.cache.delete(`${linkId} ${podBase}`);
   }
 
   public async providers(): Promise<string[]> {
-    return (await this.call<{ providers: string[] }>('GET', '/providers')).providers;
+    return (await this.providerInfo()).providers;
+  }
+
+  /** All configured providers, and those that support private mode. */
+  public async providerInfo(): Promise<{ providers: string[]; session: string[] }> {
+    const info = await this.call<{ providers: string[]; session?: string[] }>('GET', '/providers');
+    return { providers: info.providers, session: info.session ?? [] };
   }
 
   public async links(accountId: string): Promise<StorageLink[]> {
@@ -125,12 +143,22 @@ export class TokenBrokerClient {
   }
 
   public async unlink(linkId: string, accountId: string): Promise<{ provider: string; revokedAtProvider: string }> {
-    for (const key of this.cache.keys()) {
-      if (key.startsWith(`${linkId} `)) {
-        this.cache.delete(key);
-      }
-    }
+    this.invalidateLink(linkId);
     return this.call('DELETE', `/links/${encodeURIComponent(linkId)}?accountId=${encodeURIComponent(accountId)}`);
+  }
+
+  /** Private mode: what the browser needs to sign in to the provider itself. */
+  public async sessionConfig(provider: string): Promise<Record<string, unknown>> {
+    return this.call('POST', '/session/config', { provider });
+  }
+
+  /** Private mode: an access token the owner's browser got from the provider. */
+  public async pushSession(provider: string, accountId: string, accessToken: string, expiresIn: number):
+  Promise<StorageLink> {
+    const { link } = await this.call<{ link: StorageLink }>('POST', '/session/push', { provider, accountId, accessToken, expiresIn });
+    // The newest token from the owner's browser wins over whatever we cached.
+    this.invalidateLink(link.linkId);
+    return link;
   }
 
   public async pods(): Promise<{ podBase: string; linkId: string }[]> {

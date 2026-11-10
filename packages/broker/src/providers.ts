@@ -18,8 +18,27 @@ export interface ProviderAccount {
 /** Thrown when the provider says the grant is dead (revoked, expired, password changed …). */
 export class InvalidGrantError extends Error {}
 
+/** What a browser needs to sign in to the provider by itself, as a public client with PKCE (private mode). */
+export interface SessionConfig {
+  authorizeEndpoint: string;
+  tokenEndpoint: string;
+  clientId: string;
+  scope: string;
+  redirectUri: string;
+  /** Extra authorize parameters. */
+  params: Record<string, string>;
+}
+
+/** Private mode: the browser holds the grant, the broker only ever sees access tokens. */
+export interface SessionSupport {
+  config(redirectUri: string): SessionConfig;
+  /** Who an access token belongs to, asked of the provider itself (the browser's word isn't enough). */
+  identifyAccess(accessToken: string): Promise<ProviderAccount>;
+}
+
 export interface Provider {
   readonly name: ProviderName;
+  readonly session?: SessionSupport;
   authorizeUrl(args: { state: string; challenge: string; redirectUri: string; loginHint?: string }): string;
   exchange(code: string, verifier: string, redirectUri: string): Promise<TokenSet>;
   refresh(refreshToken: string): Promise<TokenSet>;
@@ -76,9 +95,35 @@ async function tokenRequest(url: string, form: Record<string, string | undefined
 export class OneDriveProvider implements Provider {
   public readonly name = 'onedrive';
   private readonly authority: string;
+  public readonly session: SessionSupport;
 
-  public constructor(private readonly client: ClientConfig, tenant = 'common') {
+  public constructor(private readonly client: ClientConfig, tenant = 'common', graph = 'https://graph.microsoft.com') {
     this.authority = `https://login.microsoftonline.com/${tenant}/oauth2/v2.0`;
+    this.session = {
+      // The same app registration, with the session page registered under "Single-page application".
+      config: (redirectUri) => ({
+        authorizeEndpoint: `${this.authority}/authorize`,
+        tokenEndpoint: `${this.authority}/token`,
+        clientId: this.client.clientId,
+        scope: 'openid offline_access Files.ReadWrite.AppFolder',
+        redirectUri,
+        params: { prompt: 'select_account', response_mode: 'query' },
+      }),
+      // An app-folder token can read the app folder, whose parent reference names the drive.
+      identifyAccess: async(accessToken) => {
+        const res = await fetch(`${graph}/v1.0/me/drive/special/approot?$select=id,parentReference`, {
+          headers: { authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) {
+          throw new Error(`OneDrive rejected the access token (${res.status}).`);
+        }
+        const item = await res.json() as { parentReference?: { driveId?: string } };
+        if (!item.parentReference?.driveId) {
+          throw new Error('OneDrive did not say which drive this token belongs to.');
+        }
+        return { id: `drive/${item.parentReference.driveId}` };
+      },
+    };
   }
 
   private readonly scope = 'openid email offline_access Files.ReadWrite.AppFolder';
@@ -273,6 +318,38 @@ export class GoogleDriveProvider implements Provider {
 export class FakeProvider implements Provider {
   public readonly name = 'fake';
   private readonly valid = new Set<string>();
+  /** Lifetime of tokens from the browser-facing endpoint. */
+  public sessionExpiresIn = 3600;
+  /** Browser sign-in goes to the broker's /fake/ routes, which exist only when the fake provider is on. */
+  public publicUrl = 'http://localhost:3997';
+  public readonly session: SessionSupport = {
+    config: (redirectUri) => ({
+      authorizeEndpoint: `${this.publicUrl}/fake/authorize`,
+      tokenEndpoint: `${this.publicUrl}/fake/token`,
+      clientId: 'fake-spa',
+      scope: 'files',
+      redirectUri,
+      params: {},
+    }),
+    identifyAccess: async(accessToken) => {
+      const [ prefix, account ] = accessToken.split('.');
+      if (prefix !== 'fake-at' || !account) {
+        throw new Error('not a fake access token');
+      }
+      return { id: account, email: `${account}@example.test` };
+    },
+  };
+
+  /** The browser-facing token endpoint of the fake provider: authorization_code and refresh_token grants. */
+  public async publicToken(form: URLSearchParams): Promise<TokenSet> {
+    if (form.get('grant_type') === 'authorization_code') {
+      if (!form.get('code_verifier')) {
+        throw new InvalidGrantError('PKCE verifier missing');
+      }
+      return this.exchange(form.get('code') ?? '');
+    }
+    return this.refresh(form.get('refresh_token') ?? '');
+  }
   public refreshCount = 0;
   /** When true, a refresh invalidates the refresh token it used (stricter than Microsoft). */
   public strictRotation = false;
@@ -329,6 +406,7 @@ export function providersFromEnv(env: Record<string, string | undefined>): Map<P
     providers.set('onedrive', new OneDriveProvider(
       { clientId: env.ONEDRIVE_CLIENT_ID, clientSecret: env.ONEDRIVE_CLIENT_SECRET },
       env.ONEDRIVE_TENANT ?? 'common',
+      env.GRAPH_URL,
     ));
   }
   if (env.DROPBOX_CLIENT_ID) {
@@ -338,7 +416,9 @@ export function providersFromEnv(env: Record<string, string | undefined>): Map<P
     providers.set('googledrive', new GoogleDriveProvider({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }));
   }
   if (env.BROKER_FAKE_PROVIDER === '1') {
-    providers.set('fake', new FakeProvider());
+    const fake = new FakeProvider();
+    fake.publicUrl = env.BROKER_FAKE_PUBLIC_URL ?? fake.publicUrl;
+    providers.set('fake', fake);
   }
   return providers;
 }

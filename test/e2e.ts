@@ -216,5 +216,38 @@ check('its files stay in the owner\'s storage', existsSync(join(cloudDir, 'alice
 const stillLocal = await fetch(`${base}${localPod}/profile/card`);
 check('the local pod is unaffected', stillLocal.status === 200, String(stillLocal.status));
 
+// ---- private mode: bob's browser holds the grant; the server only gets access tokens.
+const bobStorage = bob.controls.account.storage;
+const bobView = await get(bobStorage, bob.token);
+check('private mode is offered for the test provider', bobView.body.sessionProviders?.includes('fake'), JSON.stringify(bobView.body.sessionProviders));
+const config = await post(bobStorage, { sessionConfig: 'fake' }, bob.token);
+check('the browser gets the provider\'s endpoints and the session redirect URI',
+  config.status === 200 && config.body.redirectUri === `${base}.account/storage/session/`, JSON.stringify(config.body));
+// What the session page does: PKCE code exchange straight with the provider, then hand over the access token.
+const noPkce = await fetch(config.body.tokenEndpoint, { method: 'POST', body: new URLSearchParams({ grant_type: 'authorization_code', code: 'fake-code.bob' }) });
+check('the provider refuses a code exchange without PKCE', noPkce.status === 400);
+const browserTokens = await (await fetch(config.body.tokenEndpoint, {
+  method: 'POST', body: new URLSearchParams({ grant_type: 'authorization_code', code: 'fake-code.bob', code_verifier: 'v'.repeat(43) }),
+})).json() as Record<string, any>;
+const pushed = await post(bobStorage, { session: { provider: 'fake', accessToken: browserTokens.access_token, expiresIn: browserTokens.expires_in } }, bob.token);
+check('pushing an access token creates a private-mode link', pushed.status === 200 && pushed.body.link.mode === 'session' && Boolean(pushed.body.link.onlineUntil), JSON.stringify(pushed.body));
+const forged = await post(bobStorage, { session: { provider: 'fake', accessToken: 'made-up', expiresIn: 3600 } }, bob.token);
+check('a token the provider doesn\'t recognise is refused', forged.status === 400, String(forged.status));
+const privatePod = `pm${run}`;
+const pmPod = await post(bob.controls.account.pod, { name: privatePod, settings: { linkId: pushed.body.link.linkId } }, bob.token);
+check('bob creates a pod in private mode', pmPod.status === 200, JSON.stringify(pmPod.body));
+const pmRead = await fetch(`${base}${privatePod}/profile/card`);
+check('it is served while bob is connected', pmRead.status === 200, String(pmRead.status));
+check('its files are in bob\'s storage', existsSync(join(cloudDir, 'bob', privatePod, 'profile', 'card$.ttl')));
+const pmDump = Bun.spawnSync([ 'docker', 'exec', 'ubisolid-test-broker-1', 'bun', '-e',
+  "const {Database}=require('bun:sqlite');console.log(JSON.stringify(new Database('/data/broker.sqlite').query('select * from links').all()))" ]).stdout.toString();
+check('the broker stores no token at all for a private-mode link', pmDump.includes(pushed.body.link.linkId) &&
+  !pmDump.includes(browserTokens.refresh_token) && !pmDump.includes(browserTokens.access_token));
+// Bob's browser goes away; a token that ran out takes the pod offline. Push one with 61 s left, wait past the margin.
+await post(bobStorage, { session: { provider: 'fake', accessToken: browserTokens.access_token, expiresIn: 62 } }, bob.token);
+await Bun.sleep(3_000);
+const pmOffline = await fetch(`${base}${privatePod}/profile/card`);
+check('when bob\'s browser stops renewing, the pod answers 503', pmOffline.status === 503, String(pmOffline.status));
+
 console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
